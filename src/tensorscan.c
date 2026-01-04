@@ -240,3 +240,15 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
   closedir(dir);
   return row;
 }
+
+size_t ts_core_count(size_t ignored) {
+  long n = 0;
+
+  (void)ignored;
+  n = sysconf(_SC_NPROCESSORS_ONLN);
+  if (n < 1) {
+    n = 1;
+  }
+
+  return (size_t)n;
+}

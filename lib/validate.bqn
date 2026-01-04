@@ -3,7 +3,7 @@ ts ← •Import "./tensor.bqn"
 
 rows ← 1024
 cols ← 11
-cores ← 8
+cores ← ts.CoreCount
 t ← 3
 
 snaps ← ts.Capture t rows cols

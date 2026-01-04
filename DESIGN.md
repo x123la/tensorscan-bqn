@@ -66,5 +66,6 @@ The current C shim (`tensorscan/src/tensorscan.c`) provides a 2D matrix:
 - Shape: PID × Metric (row-major)
 - Metric order: matches the catalog above
 - PID list: optional `double* pid_out` of length P
+- Core count helper: `ts_core_count(size_t)` returns online processors
 
 The time axis will be layered on top by the BQN pipeline in the next phase.

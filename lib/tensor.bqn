@@ -2,12 +2,17 @@
 ⍝ ts_snapshot signature:
 ⍝   size_t ts_snapshot(double* out, size_t max_rows, size_t max_cols,
 ⍝                      double* pid_out)
+⍝ ts_core_count signature:
+⍝   size_t ts_core_count(size_t ignored)
 ⍝ Adjust the signature string if your CBQN build uses different type codes.
 
 lib ← •FFI "./libtensorscan.so"
 
 ⍝ "p" = pointer, "n" = size_t (native word). Return is size_t.
 ts_snapshot ← lib ⟨"ts_snapshot", "pnnP>n"⟩
+ts_core_count ← lib ⟨"ts_core_count", "n>n"⟩
+
+CoreCount ← ts_core_count 0
 
 ⍝ Metric indices (mirror tensorscan.h)
 UTIME ← 0
@@ -134,15 +139,19 @@ MetricSlice ← { tensor metric_idx;
 ⍝ Output shape is (T-1)×P×M×C.
 ToDeltas ← { tensor;
   (T‿P‿M‿C) ← ≢ tensor
+  t1 ← 0 ⌈ (T - 1)
   d ← (1↓tensor) - (¯1↓tensor)
   g ← 1↓tensor
+  presentC ← 0 < MetricSlice tensor STARTTIME
+  pairC ← (1↓presentC) ∧ (¯1↓presentC)
   per_metric ← {i;
     sel ← 0 < +´ (i = CounterMetrics)
     di ← MetricSlice d i
     gi ← MetricSlice g i
-    sel × di + (1 - sel) × gi
+    delta ← 0 ⌈ (di × pairC)
+    sel × delta + (1 - sel) × gi
   }¨ ↕M
-  tmp ← (M‿(T - 1)‿P‿C) ⥊ ∾ per_metric
+  tmp ← (M‿t1‿P‿C) ⥊ ∾ per_metric
   tmp ⍉ ⟨1,2,0,3⟩
 }
 
@@ -195,8 +204,9 @@ Gradient ← " .:-=+*#%@"
 
 Normalize ← { vals;
   r ← ∾ vals
-  mn ← ⌊´ r
-  mx ← ⌈´ r
+  r2 ← r ∾ (0 = ≠r) ⥊ 0
+  mn ← ⌊´ r2
+  mx ← ⌈´ r2
   den ← (mx - mn) + (mx = mn)
   (vals - mn) ÷ den
 }

@@ -35,6 +35,9 @@ enum ts_metric_index {
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out);
 
+/* Return number of online processors; takes a dummy argument for FFI. */
+size_t ts_core_count(size_t ignored);
+
 #ifdef __cplusplus
 }
 #endif
