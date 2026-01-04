@@ -55,6 +55,8 @@ size_t ts_snapshot_filtered(double *out, size_t max_rows, size_t max_cols,
 /*
  * Delta-ready snapshot. Counter metrics return per-interval deltas if a
  * previous snapshot exists, otherwise 0. Non-counter metrics are absolute.
+ * pid_out must be non-NULL so rows can be matched across snapshots.
+ * Returns the total number of processes found (may exceed max_rows).
  */
 size_t ts_snapshot_delta(double *out, size_t max_rows, size_t max_cols,
                          double *pid_out);

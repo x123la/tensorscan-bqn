@@ -25,23 +25,27 @@ Shape: Time × PID×StartTime × Metric × Core
 - PID list: each snapshot is accompanied by a PID vector of length P_t that
   maps rows to real PIDs.
 
-## Metric Catalog (Initial 13)
+## Metric Catalog (Current 17)
 
-Index | Name                       | Source                    | Unit
------ | -------------------------- | ------------------------- | ------------------------
-0     | utime                      | /proc/[pid]/stat          | clock ticks
-1     | stime                      | /proc/[pid]/stat          | clock ticks
-2     | rss                        | /proc/[pid]/stat          | bytes
-3     | vsize                      | /proc/[pid]/stat          | bytes
-4     | num_threads                | /proc/[pid]/status        | count
-5     | voluntary_ctxt_switches    | /proc/[pid]/status        | count
-6     | nonvoluntary_ctxt_switches | /proc/[pid]/status        | count
-7     | processor                  | /proc/[pid]/stat          | core id
-8     | io_read_bytes              | /proc/[pid]/io            | bytes
-9     | io_write_bytes             | /proc/[pid]/io            | bytes
-10    | starttime                  | /proc/[pid]/stat          | clock ticks since boot
-11    | uid                        | /proc/[pid]/status        | numeric uid
-12    | ppid                       | /proc/[pid]/status        | parent pid
+Index | Name        | Source              | Unit
+----- | ----------- | ------------------- | ----------------------
+0     | utime       | /proc/[pid]/stat    | ns of CPU time
+1     | stime       | /proc/[pid]/stat    | ns of CPU time
+2     | rss         | /proc/[pid]/stat    | bytes
+3     | vsize       | /proc/[pid]/stat    | bytes
+4     | num_threads | /proc/[pid]/status  | count
+5     | vol_ctx     | /proc/[pid]/status  | count
+6     | nonvol_ctx  | /proc/[pid]/status  | count
+7     | processor   | /proc/[pid]/stat    | core id
+8     | io_read     | /proc/[pid]/io      | bytes
+9     | io_write    | /proc/[pid]/io      | bytes
+10    | starttime   | /proc/[pid]/stat    | ns since boot
+11    | uid         | /proc/[pid]/status  | numeric uid
+12    | ppid        | /proc/[pid]/status  | parent pid
+13    | priority    | /proc/[pid]/stat    | scheduler priority
+14    | nice        | /proc/[pid]/stat    | nice value
+15    | minflt      | /proc/[pid]/stat    | count
+16    | majflt      | /proc/[pid]/stat    | count
 
 ## Core Axis Policy (Draft)
 
@@ -61,9 +65,16 @@ Normalization is handled in BQN:
 - io_* metrics are converted to per-interval deltas.
 - rss/vsize are absolute at snapshot time.
 
+## Platform Notes
+
+- macOS does not expose nonvoluntary context switches; `nonvol_ctx` is set to -1.
+- macOS I/O counters are filled via `proc_pid_rusage` when available; otherwise -1.
+- macOS `processor` currently maps to the scheduling policy, not a core id.
+- macOS `ts_get_total_cpu_ticks` currently returns 0.
+
 ## C Shim Contract (Current)
 
-The current C shim (`tensorscan/src/tensorscan.c`) provides a 2D matrix:
+The current C shim (`src/ffi_layer.c`) provides a 2D matrix:
 
 - Shape: PID × Metric (row-major)
 - Metric order: matches the catalog above
@@ -72,7 +83,8 @@ The current C shim (`tensorscan/src/tensorscan.c`) provides a 2D matrix:
 - Kernel-wide helpers: `ts_get_total_cpu_ticks()` and `ts_get_mem_total_bytes()`
 - Filtered snapshots: `ts_snapshot_filtered(...)` supports pid range, whitelist,
   and uid filters
-- Delta-ready snapshots: `ts_snapshot_delta(...)` outputs counter deltas
+- Delta-ready snapshots: `ts_snapshot_delta(...)` outputs counter deltas and
+  requires a non-NULL `pid_out` to match rows across snapshots
 - Metadata helpers: `ts_read_comm`, `ts_read_cmdline`, `ts_read_cgroup` provide
   optional per-pid strings
 

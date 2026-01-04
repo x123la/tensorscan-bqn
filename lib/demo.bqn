@@ -1,14 +1,14 @@
-⍝ Minimal TensorScan demo runner (CBQN).
-ts ← •Import (•path) ∾ "tensor.bqn"
+# Minimal TensorScan demo runner (CBQN).
+ts ← •Import (•path) ∾ "/tensor.bqn"
 
 rows ← 4096
-cols ← ts.MetricCount
-cores ← ts.CoreCount
+cols ← ts.MetricCount 0
+cores ← ts.CoreCount 0
 
 buf ← (rows‿cols) ⥊ 0
 pids ← rows ⥊ 0
 
-count ← ts.ts_snapshot buf rows cols pids
+count ← ts.TsSnapshot buf‿rows‿cols‿pids
 
 show_rows ← count⌊rows
 
@@ -19,11 +19,11 @@ show_rows ← count⌊rows
 •Show "sample_metrics"
 •Show show_rows ↑ buf
 
-⍝ Time-series capture + heatmap
-snaps ← ts.Capture 5 rows cols 0.01
-_keys times tensor ← ts.Tensor4D snaps cores
+# Time-series capture + heatmap
+snaps ← ts.Capture 5‿rows‿cols‿0.01
+_keys‿times‿tensor ← ts.Tensor4D snaps‿cores
 •Show "utime_density"
-ts.DensityView (times‿tensor) ts.UTIME
+ts.DensityView times‿tensor‿ts.utime
 
-⍝ Clean up thread-local C buffers
-ts.ts_free_thread_resources 0
+# Clean up thread-local C buffers
+ts.TsFreeThreadResources 0

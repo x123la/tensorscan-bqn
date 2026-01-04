@@ -35,16 +35,30 @@ static int cmp_pids(const void *a, const void *b) {
     return (pa < pb) ? -1 : (pa > pb);
 }
 
+static int ts_pid_in_whitelist(pid_t pid, const double *list, size_t count) {
+    if (!list || count == 0) return 1;
+    for (size_t i = 0; i < count; ++i) {
+        if ((pid_t)list[i] == pid) return 1;
+    }
+    return 0;
+}
+
 // macOS Implementation of the Snapshot
 size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
                                   double *pid_out, const struct ts_filter *filter) {
     pid_t *pids = NULL;
     int count = get_proc_list(&pids);
     if (count == 0) return 0;
-    
+
+    if (!out || max_cols < TS_METRIC_COUNT) {
+        free(pids);
+        return 0;
+    }
+
     qsort(pids, count, sizeof(pid_t), cmp_pids);
 
     size_t row = 0;
+    size_t found_successes = 0;
 
     for (int i = 0; i < count; i++) {
         pid_t pid = pids[i];
@@ -54,7 +68,7 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
         if (filter) {
             if (filter->pid_min >= 0 && pid < (pid_t)filter->pid_min) continue;
             if (filter->pid_max >= 0 && pid > (pid_t)filter->pid_max) continue;
-            // Whitelist logic omitted for brevity
+            if (!ts_pid_in_whitelist(pid, filter->pid_whitelist, filter->whitelist_count)) continue;
         }
 
         struct proc_taskinfo ti;
@@ -66,7 +80,8 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
         ret = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi, sizeof(bi));
         if (ret <= 0) continue;
 
-        if (row >= max_rows) break;
+        found_successes++;
+        if (row >= max_rows) continue;
 
         double *r = out + (row * max_cols);
         
@@ -77,8 +92,10 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
         r[TS_VSIZE] = (double)ti.pti_virtual_size;
         r[TS_NUM_THREADS] = (double)ti.pti_threadnum;
         r[TS_VOL_CTX_SWITCHES] = (double)ti.pti_csw;
-        r[TS_NONVOL_CTX_SWITCHES] = 0; // Not easily available on mach
+        r[TS_NONVOL_CTX_SWITCHES] = -1; // Not easily available on mach
         r[TS_PROCESSOR] = (double)ti.pti_policy; // Not exactly core ID, but scheduling policy
+        r[TS_IO_READ_BYTES] = -1;
+        r[TS_IO_WRITE_BYTES] = -1;
         struct rusage_info_v4 ri;
         if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&ri) == 0) {
             r[TS_IO_READ_BYTES] = (double)ri.ri_diskio_bytesread;
@@ -98,7 +115,7 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
     
     free(pids);
     
-    return row;
+    return found_successes;
 }
 
 // Helpers
@@ -122,9 +139,11 @@ unsigned long long ts_driver_get_mem_total_bytes(void) {
 // Stubs for string helpers
 size_t ts_driver_read_comm(pid_t pid, char *out, size_t out_len) {
     struct proc_bsdinfo bi;
+    if (!out || out_len == 0) return 0;
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi, sizeof(bi)) > 0) {
-        strncpy(out, bi.pbi_comm, out_len);
-        return strlen(out);
+        strncpy(out, bi.pbi_comm, out_len - 1);
+        out[out_len - 1] = '\0';
+        return strnlen(out, out_len);
     }
     return 0;
 }
