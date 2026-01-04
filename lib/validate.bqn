@@ -6,7 +6,7 @@ cols ← ts.MetricCount
 cores ← ts.CoreCount
 t ← 3
 
-snaps ← ts.Capture t rows cols
+snaps ← ts.Capture t rows cols 0.01
 all_keys times tensor ← ts.Tensor4D snaps cores
 
 shape ← ≢ tensor

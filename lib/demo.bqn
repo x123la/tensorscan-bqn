@@ -20,7 +20,7 @@ show_rows ← count⌊rows
 •Show show_rows ↑ buf
 
 ⍝ Time-series capture + heatmap
-snaps ← ts.Capture 5 rows cols
+snaps ← ts.Capture 5 rows cols 0.01
 _keys times tensor ← ts.Tensor4D snaps cores
 •Show "utime_density"
 ts.DensityView (times‿tensor) ts.UTIME

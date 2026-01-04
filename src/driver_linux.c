@@ -26,17 +26,7 @@ static long ts_page_size = -1;
 static __thread pid_t *ts_pid_buf = NULL;
 static __thread size_t ts_pid_cap = 0;
 
-struct ts_prev_row {
-  pid_t pid;
-  unsigned long long starttime;
-  double metrics[TS_METRIC_COUNT];
-};
 
-static __thread struct ts_prev_row *ts_prev_rows = NULL;
-static __thread size_t ts_prev_cap = 0;
-static __thread size_t ts_prev_count = 0;
-static __thread struct ts_prev_row *ts_curr_rows = NULL;
-static __thread size_t ts_curr_cap = 0;
 
 static int ts_is_numeric(const char *s) {
   if (!s || *s == '\0') {
@@ -220,27 +210,12 @@ static int ts_pid_in_whitelist(pid_t pid, const double *list, size_t count) {
   return 0;
 }
 
-static int ts_ensure_rows_capacity(struct ts_prev_row **rows, size_t *cap,
-                                   size_t needed) {
-  if (needed <= *cap) return 1;
-  size_t new_cap = *cap ? *cap : 1024;
-  while (new_cap < needed) new_cap *= 2;
-  struct ts_prev_row *tmp = realloc(*rows, new_cap * sizeof(*tmp));
-  if (!tmp) return 0;
-  *rows = tmp;
-  *cap = new_cap;
-  return 1;
-}
-
-size_t ts_driver_snapshot(double *out, size_t max_rows, size_t max_cols,
-                          double *pid_out, const struct ts_filter *filter,
-                          int delta_mode) {
+size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
+                                  double *pid_out, const struct ts_filter *filter) {
   DIR *dir = NULL;
   struct dirent *ent = NULL;
   size_t found_successes = 0;
   size_t pids_count = 0;
-  size_t prev_i = 0;
-  size_t curr_count = 0;
   size_t row = 0;
 
   if (!out || max_cols < TS_METRIC_COUNT) return 0;
@@ -264,11 +239,7 @@ size_t ts_driver_snapshot(double *out, size_t max_rows, size_t max_cols,
 
   qsort(ts_pid_buf, pids_count, sizeof(pid_t), ts_cmp_pids);
 
-  if (delta_mode) {
-    if (!ts_ensure_rows_capacity(&ts_curr_rows, &ts_curr_cap, pids_count)) {
-      delta_mode = 0;
-    }
-  }
+
 
   for (size_t i = 0; i < pids_count; ++i) {
     unsigned long long utime = 0, stime = 0, starttime = 0, vsize = 0;
@@ -281,10 +252,7 @@ size_t ts_driver_snapshot(double *out, size_t max_rows, size_t max_cols,
     long long uid = -1, ppid = -1;
     pid_t pid = ts_pid_buf[i];
     double metrics[TS_METRIC_COUNT];
-    double deltas[TS_METRIC_COUNT];
     double *row_ptr = NULL;
-    int have_prev = 0;
-    const struct ts_prev_row *prev = NULL;
 
     if (filter) {
       if (filter->pid_min >= 0 && pid < (pid_t)filter->pid_min) continue;
@@ -323,74 +291,28 @@ size_t ts_driver_snapshot(double *out, size_t max_rows, size_t max_cols,
 
     found_successes++;
 
-    if (delta_mode) {
-      while (prev_i < ts_prev_count && ts_prev_rows[prev_i].pid < pid) prev_i++;
-      if (prev_i < ts_prev_count && ts_prev_rows[prev_i].pid == pid &&
-          ts_prev_rows[prev_i].starttime == starttime) {
-        have_prev = 1;
-        prev = &ts_prev_rows[prev_i];
-      }
-
-      for (size_t m = 0; m < TS_METRIC_COUNT; ++m) deltas[m] = metrics[m];
-
-      const int counter_metrics[] = {TS_UTIME, TS_STIME, TS_VOL_CTX_SWITCHES,
-                                     TS_NONVOL_CTX_SWITCHES, TS_IO_READ_BYTES,
-                                     TS_IO_WRITE_BYTES, TS_MINFLT, TS_MAJFLT};
-      for (size_t c = 0; c < sizeof(counter_metrics) / sizeof(counter_metrics[0]); ++c) {
-        int idx = counter_metrics[c];
-        double curr = metrics[idx];
-        if (curr < 0) {
-          deltas[idx] = -1;
-          continue;
-        }
-        if (!have_prev || !prev || prev->metrics[idx] < 0) {
-          deltas[idx] = 0;
-          continue;
-        }
-        double delta = curr - prev->metrics[idx];
-        if (delta < 0) delta = 0;
-        deltas[idx] = delta;
-      }
-    }
-
     if (row < max_rows) {
       row_ptr = out + (row * max_cols);
-      if (delta_mode) {
-        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) row_ptr[m] = deltas[m];
-      } else {
-        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) row_ptr[m] = metrics[m];
+      for (size_t m = 0; m < TS_METRIC_COUNT; ++m) {
+        row_ptr[m] = metrics[m];
       }
-      if (pid_out) pid_out[row] = (double)pid;
+      if (pid_out) {
+        pid_out[row] = (double)pid;
+      }
       row++;
     }
-
-    if (delta_mode) {
-      if (curr_count < ts_curr_cap) {
-        ts_curr_rows[curr_count].pid = pid;
-        ts_curr_rows[curr_count].starttime = starttime;
-        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) ts_curr_rows[curr_count].metrics[m] = metrics[m];
-        curr_count++;
-      }
-    }
   }
 
-  if (delta_mode) {
-    struct ts_prev_row *tmp = ts_prev_rows;
-    ts_prev_rows = ts_curr_rows;
-    ts_curr_rows = tmp;
-    ts_prev_count = curr_count;
-  }
+
   return found_successes;
 }
 
 void ts_driver_free_thread_resources(void) {
-  if (ts_pid_buf) { free(ts_pid_buf); ts_pid_buf = NULL; }
+  if (ts_pid_buf) {
+    free(ts_pid_buf);
+    ts_pid_buf = NULL;
+  }
   ts_pid_cap = 0;
-  if (ts_prev_rows) { free(ts_prev_rows); ts_prev_rows = NULL; }
-  ts_prev_cap = 0;
-  ts_prev_count = 0;
-  if (ts_curr_rows) { free(ts_curr_rows); ts_curr_rows = NULL; }
-  ts_curr_cap = 0;
 }
 
 size_t ts_driver_core_count(void) {

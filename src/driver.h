@@ -11,10 +11,10 @@ struct ts_filter {
   size_t whitelist_count;
 };
 
-/* The core function that OS-specific files must implement */
-size_t ts_driver_snapshot(double *out, size_t max_rows, size_t max_cols,
-                          double *pid_out, const struct ts_filter *filter,
-                          int delta_mode);
+/* The core function that OS-specific files must implement.
+ * Populate 'out' with absolute counter values. */
+size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
+                                  double *pid_out, const struct ts_filter *filter);
 
 /* OS-specific resource cleanup */
 void ts_driver_free_thread_resources(void);

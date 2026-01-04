@@ -9,6 +9,9 @@ SRC_COMMON := src/ffi_layer.c
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
     SRC_DRIVER := src/driver_linux.c
+else ifeq ($(UNAME), Darwin)
+    SRC_DRIVER := src/driver_macos.c
+    LDFLAGS += -lproc
 else
     $(error "OS not supported yet")
 endif
