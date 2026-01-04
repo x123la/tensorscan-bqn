@@ -77,6 +77,10 @@ unsigned long long ts_get_mem_total_bytes(void);
 size_t ts_read_comm(pid_t pid, char *out, size_t out_len);
 size_t ts_read_cmdline(pid_t pid, char *out, size_t out_len);
 size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len);
+
+/* Free thread-local buffers. Call before thread exit to avoid leaks. */
+void ts_free_thread_resources(void);
+
 #ifdef __cplusplus
 }
 #endif

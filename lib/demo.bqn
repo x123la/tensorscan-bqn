@@ -1,5 +1,5 @@
 ⍝ Minimal TensorScan demo runner (CBQN).
-ts ← •Import "./tensor.bqn"
+ts ← •Import (•path) ∾ "tensor.bqn"
 
 rows ← 4096
 cols ← ts.MetricCount

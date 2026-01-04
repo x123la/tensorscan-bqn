@@ -1,5 +1,5 @@
 ⍝ TensorScan validation harness (CBQN).
-ts ← •Import "./tensor.bqn"
+ts ← •Import (•path) ∾ "tensor.bqn"
 
 rows ← 1024
 cols ← ts.MetricCount

@@ -22,7 +22,6 @@
 #define TS_PATH_MAX PATH_MAX
 #endif
 
-static __thread int ts_warned_io_perm = 0;
 static long ts_page_size = -1;
 static __thread pid_t *ts_pid_buf = NULL;
 static __thread size_t ts_pid_cap = 0;
@@ -213,13 +212,6 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   snprintf(path, sizeof(path), "/proc/%d/io", pid);
   f = fopen(path, "r");
   if (!f) {
-    if (errno == EACCES || errno == EPERM) {
-      if (!ts_warned_io_perm) {
-        fprintf(stderr, "TensorScan: /proc/[pid]/io requires permission; "
-                        "I/O metrics set to -1.\n");
-        ts_warned_io_perm = 1;
-      }
-    }
     return;
   }
 
@@ -597,4 +589,25 @@ size_t ts_core_count(size_t ignored) {
     n = 1;
   }
   return (size_t)n;
+}
+
+void ts_free_thread_resources(void) {
+  if (ts_pid_buf) {
+    free(ts_pid_buf);
+    ts_pid_buf = NULL;
+  }
+  ts_pid_cap = 0;
+
+  if (ts_prev_rows) {
+    free(ts_prev_rows);
+    ts_prev_rows = NULL;
+  }
+  ts_prev_cap = 0;
+  ts_prev_count = 0;
+
+  if (ts_curr_rows) {
+    free(ts_curr_rows);
+    ts_curr_rows = NULL;
+  }
+  ts_curr_cap = 0;
 }

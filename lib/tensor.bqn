@@ -6,7 +6,7 @@
 ⍝   size_t ts_core_count(size_t ignored)
 ⍝ Adjust the signature string if your CBQN build uses different type codes.
 
-lib ← •FFI "./libtensorscan.so"
+lib ← •FFI (•path) ∾ "libtensorscan.so"
 
 ⍝ "p" = pointer, "n" = size_t (native word). Return is size_t.
 ts_snapshot ← lib ⟨"ts_snapshot", "pnnp>n"⟩
