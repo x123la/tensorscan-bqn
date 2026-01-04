@@ -62,16 +62,16 @@ size_t ts_core_count(size_t ignored);
 void ts_usleep(unsigned int usec);
 
 /* Get monotonic time in seconds. */
-double ts_get_monotonic_time(void);
+double ts_get_monotonic_time(size_t ignored);
 
 /* Get number of columns in metrics matrix. */
-size_t ts_get_metric_count(void);
+size_t ts_get_metric_count(size_t ignored);
 
 /* Total CPU ticks across all cores (from /proc/stat). */
-unsigned long long ts_get_total_cpu_ticks(void);
+unsigned long long ts_get_total_cpu_ticks(size_t ignored);
 
 /* Total system memory in bytes (from /proc/meminfo). */
-unsigned long long ts_get_mem_total_bytes(void);
+unsigned long long ts_get_mem_total_bytes(size_t ignored);
 
 /* Optional metadata helpers: read comm/cmdline/cgroup for a PID. */
 size_t ts_read_comm(pid_t pid, char *out, size_t out_len);
@@ -79,7 +79,7 @@ size_t ts_read_cmdline(pid_t pid, char *out, size_t out_len);
 size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len);
 
 /* Free thread-local buffers. Call before thread exit to avoid leaks. */
-void ts_free_thread_resources(void);
+void ts_free_thread_resources(size_t ignored);
 
 #ifdef __cplusplus
 }

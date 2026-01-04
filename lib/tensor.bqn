@@ -14,10 +14,32 @@ ts_snapshot_filtered ← lib ⟨"ts_snapshot_filtered", "pnnpffpnf>n"⟩
 ts_snapshot_delta ← lib ⟨"ts_snapshot_delta", "pnnp>n"⟩
 ts_core_count ← lib ⟨"ts_core_count", "n>n"⟩
 ts_usleep ← lib ⟨"ts_usleep", "n>"⟩
-ts_get_monotonic_time ← lib ⟨"ts_get_monotonic_time", ">f"⟩
-ts_get_metric_count ← lib ⟨"ts_get_metric_count", ">n"⟩
-ts_get_total_cpu_ticks ← lib ⟨"ts_get_total_cpu_ticks", ">n"⟩
-ts_get_mem_total_bytes ← lib ⟨"ts_get_mem_total_bytes", ">n"⟩
+ts_get_monotonic_time ← lib ⟨"ts_get_monotonic_time", "n>f"⟩
+ts_get_metric_count ← lib ⟨"ts_get_metric_count", "n>n"⟩
+ts_get_total_cpu_ticks ← lib ⟨"ts_get_total_cpu_ticks", "n>n"⟩
+ts_get_mem_total_bytes ← lib ⟨"ts_get_mem_total_bytes", "n>n"⟩
+ts_read_comm ← lib ⟨"ts_read_comm", "npn>n"⟩
+ts_read_cmdline ← lib ⟨"ts_read_cmdline", "npn>n"⟩
+ts_read_cgroup ← lib ⟨"ts_read_cgroup", "npn>n"⟩
+ts_free_thread_resources ← lib ⟨"ts_free_thread_resources", "n>"⟩
+
+ReadComm ← { pid:
+  buf ← 256 ⥊ 0
+  n ← ts_read_comm pid buf 256
+  @+ n ↑ buf
+}
+
+ReadCmdline ← { pid:
+  buf ← 4096 ⥊ 0
+  n ← ts_read_cmdline pid buf 4096
+  @+ n ↑ buf
+}
+
+ReadCgroup ← { pid:
+  buf ← 1024 ⥊ 0
+  n ← ts_read_cgroup pid buf 1024
+  @+ n ↑ buf
+}
 
 MetricCount ← ts_get_metric_count 0
 CoreCount ← ts_core_count 0

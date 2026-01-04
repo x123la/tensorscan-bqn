@@ -484,17 +484,22 @@ void ts_usleep(unsigned int usec) {
   }
 }
 
-double ts_get_monotonic_time(void) {
+double ts_get_monotonic_time(size_t ignored) {
   struct timespec ts;
+  (void)ignored;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
   }
   return 0.0;
 }
 
-size_t ts_get_metric_count(void) { return TS_METRIC_COUNT; }
+size_t ts_get_metric_count(size_t ignored) {
+  (void)ignored;
+  return TS_METRIC_COUNT;
+}
 
-unsigned long long ts_get_total_cpu_ticks(void) {
+unsigned long long ts_get_total_cpu_ticks(size_t ignored) {
+  (void)ignored;
   FILE *f = fopen("/proc/stat", "r");
   if (!f) {
     return 0;
@@ -517,7 +522,8 @@ unsigned long long ts_get_total_cpu_ticks(void) {
   return total;
 }
 
-unsigned long long ts_get_mem_total_bytes(void) {
+unsigned long long ts_get_mem_total_bytes(size_t ignored) {
+  (void)ignored;
   FILE *f = fopen("/proc/meminfo", "r");
   if (!f) {
     return 0;
@@ -591,7 +597,8 @@ size_t ts_core_count(size_t ignored) {
   return (size_t)n;
 }
 
-void ts_free_thread_resources(void) {
+void ts_free_thread_resources(size_t ignored) {
+  (void)ignored;
   if (ts_pid_buf) {
     free(ts_pid_buf);
     ts_pid_buf = NULL;
