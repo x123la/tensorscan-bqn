@@ -2,18 +2,19 @@
 ts ← •Import "./tensor.bqn"
 
 rows ← 1024
-cols ← 10
+cols ← 11
 cores ← 8
 t ← 3
 
 snaps ← ts.Capture t rows cols
-all_pids tensor ← ts.Tensor4D snaps cores
+all_keys tensor ← ts.Tensor4D snaps cores
 
 shape ← ≢ tensor
 •Show "tensor_shape"
 •Show shape
 
-ok_shape ← shape ≡ t‿(≠all_pids)‿cols‿cores
+pcount ← 0 ⊑ ≢ all_keys
+ok_shape ← shape ≡ t‿pcount‿cols‿cores
 •Show "shape_ok"
 •Show ok_shape
 

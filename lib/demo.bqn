@@ -2,7 +2,7 @@
 ts ← •Import "./tensor.bqn"
 
 rows ← 4096
-cols ← 10
+cols ← 11
 
 buf ← (rows‿cols) ⥊ 0
 pids ← rows ⥊ 0
@@ -20,6 +20,6 @@ show_rows ← count⌊rows
 
 ⍝ Time-series capture + heatmap
 snaps ← ts.Capture 5 rows cols
-_pids tensor ← ts.Tensor4D snaps 8
+_keys tensor ← ts.Tensor4D snaps 8
 •Show "utime_density"
 ts.DensityView tensor ts.UTIME

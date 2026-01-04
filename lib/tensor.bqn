@@ -1,6 +1,7 @@
 ⍝ TensorScan FFI bridge (CBQN).
 ⍝ ts_snapshot signature:
-⍝   size_t ts_snapshot(double* out, size_t max_rows, size_t max_cols, int* pid_out)
+⍝   size_t ts_snapshot(double* out, size_t max_rows, size_t max_cols,
+⍝                      double* pid_out)
 ⍝ Adjust the signature string if your CBQN build uses different type codes.
 
 lib ← •FFI "./libtensorscan.so"
@@ -19,6 +20,10 @@ NONVOL_CTX_SWITCHES ← 6
 PROCESSOR ← 7
 IO_READ_BYTES ← 8
 IO_WRITE_BYTES ← 9
+STARTTIME ← 10
+
+CounterMetrics ← ⟨UTIME, STIME, VOL_CTX_SWITCHES, NONVOL_CTX_SWITCHES,
+  IO_READ_BYTES, IO_WRITE_BYTES⟩
 
 ⍝ Take one snapshot into a fresh buffer and return ⟨count, pids, matrix⟩.
 Snapshot ← { rows cols;
@@ -45,36 +50,53 @@ CoreOneHot ← { mat proc_idx cores;
   (CoreIds mat proc_idx) =⌜ ↕cores
 }
 
-⍝ Build a stable PID axis from a list of snapshots.
+⍝ Build PID keys using ⟨pid, starttime⟩ pairs.
+PidKeys ← { snap;
+  pids ← 1 ⊑ snap
+  mat ← 2 ⊑ snap
+  start ← STARTTIME ⊏ ⍉ mat
+  ⍉ (pids‿start)
+}
+
+PidList ← { keys; 0 ⊏ ⍉ keys }
+StartList ← { keys; 1 ⊏ ⍉ keys }
+
+⍝ Build a stable PID key axis from a list of snapshots.
+AllKeys ← { snaps;
+  ∪ ∾ (PidKeys¨ snaps)
+}
+
 AllPids ← { snaps;
-  ∪ ∾ (1 ⊑¨ snaps)
+  PidList (AllKeys snaps)
 }
 
 ⍝ Align a single snapshot's matrix to the stable PID axis.
-AlignSnapshot ← { snap all_pids;
-  pids ← 1 ⊑ snap
+AlignSnapshot ← { snap all_keys;
+  keys ← PidKeys snap
   mat ← 2 ⊑ snap
-  idx ← pids ⊐ all_pids
-  valid ← idx < ≠pids
+  (P‿M) ← ≢ mat
+  idx ← keys ⊐ all_keys
+  valid ← idx < P
   safe_idx ← idx × valid
-  rows ← safe_idx ⊏ mat
+  mat0 ← mat ∾ (1‿M) ⥊ 0
+  rows ← safe_idx ⊏ mat0
   valid × rows
 }
 
 ⍝ Align a list of snapshots to a stable PID axis.
 AlignSeries ← { snaps;
-  all_pids ← AllPids snaps
-  mats ← {snap; AlignSnapshot snap all_pids}¨ snaps
-  ⟨all_pids, mats⟩
+  all_keys ← AllKeys snaps
+  mats ← {snap; AlignSnapshot snap all_keys}¨ snaps
+  ⟨all_keys, mats⟩
 }
 
 ⍝ Build a T×P×M tensor from aligned matrices.
 Tensor3D ← { snaps;
-  all_pids mats ← AlignSeries snaps
+  all_keys mats ← AlignSeries snaps
   T ← ≠mats
   (P‿M) ← ≢ (0 ⊑ mats)
   flat ← ∾ mats
-  ⟨all_pids, (T‿P‿M) ⥊ flat⟩
+  ⟨all_keys, (T‿P‿M) ⥊ flat⟩
 }
 
 ⍝ Expand one snapshot matrix to include a core axis.
@@ -93,14 +115,35 @@ ExpandCore ← { mat cores;
 }
 
 ⍝ Expand to full 4D tensor with core axis.
-⍝ Returns ⟨all_pids, tensor⟩ where tensor is T×P×M×C.
+⍝ Returns ⟨all_keys, tensor⟩ where tensor is T×P×M×C.
 Tensor4D ← { snaps cores;
-  all_pids mats ← AlignSeries snaps
+  all_keys mats ← AlignSeries snaps
   T ← ≠mats
   (P‿M) ← ≢ (0 ⊑ mats)
   expanded ← {mat; ExpandCore mat cores}¨ mats
   flat ← ∾ expanded
-  ⟨all_pids, (T‿P‿M‿cores) ⥊ flat⟩
+  ⟨all_keys, (T‿P‿M‿cores) ⥊ flat⟩
+}
+
+⍝ Extract one metric slice. Output: T×P×C.
+MetricSlice ← { tensor metric_idx;
+  metric_idx ⊏ (tensor ⍉ ⟨2,0,1,3⟩)
+}
+
+⍝ Convert cumulative counters to per-interval deltas.
+⍝ Output shape is (T-1)×P×M×C.
+ToDeltas ← { tensor;
+  (T‿P‿M‿C) ← ≢ tensor
+  d ← (1↓tensor) - (¯1↓tensor)
+  g ← 1↓tensor
+  per_metric ← {i;
+    sel ← 0 < +´ (i = CounterMetrics)
+    di ← MetricSlice d i
+    gi ← MetricSlice g i
+    sel × di + (1 - sel) × gi
+  }¨ ↕M
+  tmp ← (M‿(T - 1)‿P‿C) ⥊ ∾ per_metric
+  tmp ⍉ ⟨1,2,0,3⟩
 }
 
 ⍝ Move time axis to the last position.
@@ -127,15 +170,10 @@ VarT ← { tensor;
 
 StdT ← { tensor; √ VarT tensor }
 
-⍝ Extract one metric slice. Output: T×P×C.
-MetricSlice ← { tensor metric_idx;
-  metric_idx ⊏ (tensor ⍉ ⟨2,0,1,3⟩)
-}
-
 ⍝ Micro-stutter mask: spikes high but low mean over time.
 ⍝ Returns P×C boolean mask.
 MicroStutterMask ← { tensor metric_idx spike_thresh mean_thresh;
-  metric ← MetricSlice tensor metric_idx
+  metric ← MetricSlice (ToDeltas tensor) metric_idx
   tlast ← metric ⍉ ⟨1,2,0⟩
   n ← ¯1 ⊑ ≢ tlast
   mean ← (+´ tlast) ÷ n
@@ -145,7 +183,7 @@ MicroStutterMask ← { tensor metric_idx spike_thresh mean_thresh;
 
 ⍝ Stealth detection: z-score of per-(P,M,C) stddev vs global stddev.
 StealthZ ← { tensor;
-  s ← StdT tensor
+  s ← StdT (ToDeltas tensor)
   r ← ∾ s
   mu ← (+´ r) ÷ ≠ r
   sigma ← √ ((+´ ((r - mu) × (r - mu))) ÷ ≠ r)
@@ -172,7 +210,7 @@ MapDensity ← { vals;
 
 ⍝ Render a time×pid heatmap for a chosen metric.
 DensityMatrix ← { tensor metric_idx;
-  metric ← MetricSlice tensor metric_idx
+  metric ← MetricSlice (ToDeltas tensor) metric_idx
   +´ metric
 }
 
@@ -182,7 +220,7 @@ DensityView ← { tensor metric_idx;
 
 ⍝ Example usage:
 ⍝ rows ← 4096
-⍝ cols ← 10
+⍝ cols ← 11
 ⍝ buf ← rows⥊cols⥊0
 ⍝ pids ← rows⥊0
 ⍝ count ← ts_snapshot buf rows cols pids

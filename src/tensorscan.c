@@ -9,7 +9,17 @@
 #include <string.h>
 #include <unistd.h>
 
+#if !defined(__linux__)
+#error "TensorScan shim requires Linux /proc"
+#endif
+
+#ifndef PATH_MAX
 #define TS_PATH_MAX 4096
+#else
+#define TS_PATH_MAX PATH_MAX
+#endif
+
+static int ts_warned_io_perm = 0;
 
 static int ts_is_numeric(const char *s) {
   if (!s || *s == '\0') {
@@ -25,7 +35,8 @@ static int ts_is_numeric(const char *s) {
 
 static int ts_read_stat(pid_t pid, unsigned long long *utime,
                         unsigned long long *stime, unsigned long long *vsize,
-                        long long *rss_pages, int *processor) {
+                        long long *rss_pages, int *processor,
+                        unsigned long long *starttime) {
   char path[TS_PATH_MAX];
   char buf[4096];
   FILE *f = NULL;
@@ -45,9 +56,13 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
     fclose(f);
     return 0;
   }
+  if (!strchr(buf, '\n')) {
+    fclose(f);
+    return 0;
+  }
   fclose(f);
 
-  line = strchr(buf, ')');
+  line = strrchr(buf, ')');
   if (!line) {
     return 0;
   }
@@ -67,6 +82,9 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
     } else if (field == 15) {
       *stime = strtoull(token, NULL, 10);
       found++;
+    } else if (field == 22) {
+      *starttime = strtoull(token, NULL, 10);
+      found++;
     } else if (field == 23) {
       *vsize = strtoull(token, NULL, 10);
       found++;
@@ -83,7 +101,7 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
     }
   }
 
-  return found >= 5;
+  return found >= 6;
 }
 
 static void ts_read_status(pid_t pid, unsigned long long *num_threads,
@@ -116,8 +134,8 @@ static void ts_read_status(pid_t pid, unsigned long long *num_threads,
   fclose(f);
 }
 
-static void ts_read_io(pid_t pid, unsigned long long *read_bytes,
-                       unsigned long long *write_bytes) {
+static void ts_read_io(pid_t pid, long long *read_bytes,
+                       long long *write_bytes) {
   char path[TS_PATH_MAX];
   char buf[512];
   FILE *f = NULL;
@@ -128,14 +146,24 @@ static void ts_read_io(pid_t pid, unsigned long long *read_bytes,
   snprintf(path, sizeof(path), "/proc/%d/io", pid);
   f = fopen(path, "r");
   if (!f) {
+    if (errno == EACCES || errno == EPERM) {
+      *read_bytes = -1;
+      *write_bytes = -1;
+      if (!ts_warned_io_perm) {
+        fprintf(stderr,
+                "TensorScan: /proc/[pid]/io requires permission; "
+                "I/O metrics set to -1.\n");
+        ts_warned_io_perm = 1;
+      }
+    }
     return;
   }
 
   while (fgets(buf, sizeof(buf), f)) {
     if (strncmp(buf, "read_bytes:", 11) == 0) {
-      *read_bytes = strtoull(buf + 11, NULL, 10);
+      *read_bytes = strtoll(buf + 11, NULL, 10);
     } else if (strncmp(buf, "write_bytes:", 12) == 0) {
-      *write_bytes = strtoull(buf + 12, NULL, 10);
+      *write_bytes = strtoll(buf + 12, NULL, 10);
     }
   }
 
@@ -143,7 +171,7 @@ static void ts_read_io(pid_t pid, unsigned long long *read_bytes,
 }
 
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
-                   int *pid_out) {
+                   double *pid_out) {
   DIR *dir = NULL;
   struct dirent *ent = NULL;
   size_t row = 0;
@@ -161,14 +189,15 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
   while ((ent = readdir(dir)) != NULL) {
     unsigned long long utime = 0;
     unsigned long long stime = 0;
+    unsigned long long starttime = 0;
     unsigned long long vsize = 0;
     long long rss_pages = 0;
     int processor = -1;
     unsigned long long num_threads = 0;
     unsigned long long vol_ctx = 0;
     unsigned long long nonvol_ctx = 0;
-    unsigned long long read_bytes = 0;
-    unsigned long long write_bytes = 0;
+    long long read_bytes = 0;
+    long long write_bytes = 0;
     pid_t pid = 0;
     double *row_ptr = NULL;
 
@@ -180,7 +209,8 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     }
 
     pid = (pid_t)strtol(ent->d_name, NULL, 10);
-    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor)) {
+    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                      &starttime)) {
       continue;
     }
 
@@ -198,9 +228,10 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     row_ptr[TS_PROCESSOR] = (double)processor;
     row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
     row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
+    row_ptr[TS_STARTTIME] = (double)starttime;
 
     if (pid_out) {
-      pid_out[row] = (int)pid;
+      pid_out[row] = (double)pid;
     }
 
     row++;

@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define TS_METRIC_COUNT 10
+#define TS_METRIC_COUNT 11
 
 enum ts_metric_index {
   TS_UTIME = 0,
@@ -19,7 +19,8 @@ enum ts_metric_index {
   TS_NONVOL_CTX_SWITCHES = 6,
   TS_PROCESSOR = 7,
   TS_IO_READ_BYTES = 8,
-  TS_IO_WRITE_BYTES = 9
+  TS_IO_WRITE_BYTES = 9,
+  TS_STARTTIME = 10
 };
 
 /*
@@ -29,9 +30,10 @@ enum ts_metric_index {
  * Columns follow enum ts_metric_index. Values are stored as double.
  *
  * Returns the number of rows filled. If pid_out is non-NULL, it is filled
- * with the corresponding PIDs (length max_rows).
+ * with the corresponding PIDs (length max_rows), as doubles.
  */
-size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols, int *pid_out);
+size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
+                   double *pid_out);
 
 #ifdef __cplusplus
 }
