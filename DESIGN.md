@@ -25,7 +25,7 @@ Shape: Time × PID×StartTime × Metric × Core
 - PID list: each snapshot is accompanied by a PID vector of length P_t that
   maps rows to real PIDs.
 
-## Metric Catalog (Initial 11)
+## Metric Catalog (Initial 13)
 
 Index | Name                       | Source                    | Unit
 ----- | -------------------------- | ------------------------- | ------------------------
@@ -40,6 +40,8 @@ Index | Name                       | Source                    | Unit
 8     | io_read_bytes              | /proc/[pid]/io            | bytes
 9     | io_write_bytes             | /proc/[pid]/io            | bytes
 10    | starttime                  | /proc/[pid]/stat          | clock ticks since boot
+11    | uid                        | /proc/[pid]/status        | numeric uid
+12    | ppid                       | /proc/[pid]/status        | parent pid
 
 ## Core Axis Policy (Draft)
 
@@ -67,5 +69,11 @@ The current C shim (`tensorscan/src/tensorscan.c`) provides a 2D matrix:
 - Metric order: matches the catalog above
 - PID list: optional `double* pid_out` of length P
 - Core count helper: `ts_core_count(size_t)` returns online processors
+- Kernel-wide helpers: `ts_get_total_cpu_ticks()` and `ts_get_mem_total_bytes()`
+- Filtered snapshots: `ts_snapshot_filtered(...)` supports pid range, whitelist,
+  and uid filters
+- Delta-ready snapshots: `ts_snapshot_delta(...)` outputs counter deltas
+- Metadata helpers: `ts_read_comm`, `ts_read_cmdline`, `ts_read_cgroup` provide
+  optional per-pid strings
 
 The time axis will be layered on top by the BQN pipeline in the next phase.

@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define TS_METRIC_COUNT 11
+#define TS_METRIC_COUNT 13
 
 enum ts_metric_index {
   TS_UTIME = 0,
@@ -21,7 +21,9 @@ enum ts_metric_index {
   TS_PROCESSOR = 7,
   TS_IO_READ_BYTES = 8,
   TS_IO_WRITE_BYTES = 9,
-  TS_STARTTIME = 10
+  TS_STARTTIME = 10,
+  TS_UID = 11,
+  TS_PPID = 12
 };
 
 /*
@@ -37,6 +39,22 @@ enum ts_metric_index {
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out);
 
+/*
+ * Filtered snapshot. Use negative values to disable pid range or uid filters.
+ * If whitelist_count is zero or pid_whitelist is NULL, no whitelist is used.
+ */
+size_t ts_snapshot_filtered(double *out, size_t max_rows, size_t max_cols,
+                            double *pid_out, double pid_min, double pid_max,
+                            const double *pid_whitelist,
+                            size_t whitelist_count, double only_uid);
+
+/*
+ * Delta-ready snapshot. Counter metrics return per-interval deltas if a
+ * previous snapshot exists, otherwise 0. Non-counter metrics are absolute.
+ */
+size_t ts_snapshot_delta(double *out, size_t max_rows, size_t max_cols,
+                         double *pid_out);
+
 /* Return number of online processors; takes a dummy argument for FFI. */
 size_t ts_core_count(size_t ignored);
 
@@ -49,6 +67,16 @@ double ts_get_monotonic_time(void);
 /* Get number of columns in metrics matrix. */
 size_t ts_get_metric_count(void);
 
+/* Total CPU ticks across all cores (from /proc/stat). */
+unsigned long long ts_get_total_cpu_ticks(void);
+
+/* Total system memory in bytes (from /proc/meminfo). */
+unsigned long long ts_get_mem_total_bytes(void);
+
+/* Optional metadata helpers: read comm/cmdline/cgroup for a PID. */
+size_t ts_read_comm(pid_t pid, char *out, size_t out_len);
+size_t ts_read_cmdline(pid_t pid, char *out, size_t out_len);
+size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len);
 #ifdef __cplusplus
 }
 #endif

@@ -10,13 +10,19 @@ lib ← •FFI "./libtensorscan.so"
 
 ⍝ "p" = pointer, "n" = size_t (native word). Return is size_t.
 ts_snapshot ← lib ⟨"ts_snapshot", "pnnp>n"⟩
+ts_snapshot_filtered ← lib ⟨"ts_snapshot_filtered", "pnnpffpnf>n"⟩
+ts_snapshot_delta ← lib ⟨"ts_snapshot_delta", "pnnp>n"⟩
 ts_core_count ← lib ⟨"ts_core_count", "n>n"⟩
 ts_usleep ← lib ⟨"ts_usleep", "n>"⟩
 ts_get_monotonic_time ← lib ⟨"ts_get_monotonic_time", ">f"⟩
 ts_get_metric_count ← lib ⟨"ts_get_metric_count", ">n"⟩
+ts_get_total_cpu_ticks ← lib ⟨"ts_get_total_cpu_ticks", ">n"⟩
+ts_get_mem_total_bytes ← lib ⟨"ts_get_mem_total_bytes", ">n"⟩
 
 MetricCount ← ts_get_metric_count 0
 CoreCount ← ts_core_count 0
+TotalCpuTicks ← ts_get_total_cpu_ticks 0
+MemTotalBytes ← ts_get_mem_total_bytes 0
 
 ⍝ Metric indices (mirror tensorscan.h)
 UTIME ← 0
@@ -30,6 +36,8 @@ PROCESSOR ← 7
 IO_READ_BYTES ← 8
 IO_WRITE_BYTES ← 9
 STARTTIME ← 10
+UID ← 11
+PPID ← 12
 
 CounterMetrics ← ⟨UTIME, STIME, VOL_CTX_SWITCHES, NONVOL_CTX_SWITCHES,
   IO_READ_BYTES, IO_WRITE_BYTES⟩
@@ -43,6 +51,30 @@ Snapshot ← { rows cols;
   pids_s ← (rows⌊count) ↑ pids
   buf_s ← (rows⌊count) ↑ buf
   ⍝ Safety: filter out any rows with pid=0 or starttime=0 to prevent alignment pollution.
+  keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
+  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
+}
+
+⍝ Filtered snapshot. Use ¯1 for pid_min/pid_max/only_uid to disable.
+SnapshotFiltered ← { rows cols pid_min pid_max pid_whitelist only_uid;
+  buf ← (rows‿cols) ⥊ 0
+  pids ← rows ⥊ 0
+  count ← ts_snapshot_filtered buf rows cols pids pid_min pid_max pid_whitelist (≠pid_whitelist) only_uid
+  _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
+  pids_s ← (rows⌊count) ↑ pids
+  buf_s ← (rows⌊count) ↑ buf
+  keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
+  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
+}
+
+⍝ Delta-ready snapshot (counter metrics are deltas).
+SnapshotDelta ← { rows cols;
+  buf ← (rows‿cols) ⥊ 0
+  pids ← rows ⥊ 0
+  count ← ts_snapshot_delta buf rows cols pids
+  _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
+  pids_s ← (rows⌊count) ↑ pids
+  buf_s ← (rows⌊count) ↑ buf
   keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
   ⟨+´ keep, keep / pids_s, keep / buf_s⟩
 }
@@ -69,9 +101,9 @@ CoreIds ← { mat proc_idx;
 ⍝ Output shape: P×C (P processes, C cores).
 CoreOneHot ← { mat proc_idx cores;
   ids ← CoreIds mat proc_idx
-  ⍝ Clamp core ids to [0, cores-1] to handle hotplugged CPUs
+  valid ← (0 ≤ ids) ∧ (ids < cores)
   safe_ids ← (cores - 1) ⌊ 0 ⌈ ids
-  safe_ids =⌜ ↕cores
+  (safe_ids =⌜ ↕cores) × (valid ⌜⊣ ↕cores)
 }
 
 ⍝ Build PID keys using ⟨pid, starttime⟩ pairs.
@@ -101,7 +133,9 @@ AlignSnapshot ← { snap all_keys;
   (P‿M) ← ≢ mat
   idx ← keys ⊐ all_keys
   mat0 ← mat ∾ (1‿M) ⥊ 0
-  rows ← idx ⊏ mat0
+  miss ← (idx < 0) ∨ (idx ≥ P)
+  safe_idx ← (idx × (1 - miss)) + (miss × P)
+  rows ← safe_idx ⊏ mat0
   rows
 }
 
@@ -126,14 +160,13 @@ Tensor3D ← { snaps;
 ExpandCore ← { mat cores;
   (P‿M) ← ≢ mat
   core_hot ← CoreOneHot mat PROCESSOR cores
-  per_metric ← {i;
-    sel ← i = PROCESSOR
-    col ← i ⊏ ⍉ mat
-    broad ← col ⌜⊣ ↕cores
-    sel × core_hot + (1 - sel) × broad
-  }¨ ↕M
-  tmp ← (M‿P‿cores) ⥊ ∾ per_metric
-  tmp ⍉ ⟨1,0,2⟩
+  broad ← mat ⌜⊣ ↕cores
+  broad_m ← broad ⍉ ⟨1,0,2⟩
+  core_hot2 ← (1‿P‿cores) ⥊ core_hot
+  before ← PROCESSOR ↑ broad_m
+  after ← (PROCESSOR + 1) ↓ broad_m
+  merged ← before ∾ core_hot2 ∾ after
+  merged ⍉ ⟨1,0,2⟩
 }
 
 ⍝ Expand to full 4D tensor with core axis.
@@ -217,6 +250,43 @@ StealthZ ← { tensor;
   mu ← (+´ r) ÷ ≠ r
   sigma ← √ ((+´ ((r - mu) × (r - mu))) ÷ ≠ r)
   (s - mu) ÷ sigma
+}
+
+⍝ IO burst but low CPU usage.
+IOBurstLowCPU ← { tensor io_thresh cpu_thresh;
+  d ← ToDeltas tensor
+  io ← (MetricSlice d IO_READ_BYTES) + (MetricSlice d IO_WRITE_BYTES)
+  cpu ← (MetricSlice d UTIME) + (MetricSlice d STIME)
+  io_tlast ← io ⍉ ⟨1,2,0⟩
+  cpu_tlast ← cpu ⍉ ⟨1,2,0⟩
+  n ← ¯1 ⊑ ≢ io_tlast
+  io_peak ← ⌈´ io_tlast
+  cpu_mean ← (+´ cpu_tlast) ÷ n
+  (io_peak > io_thresh) ∧ (cpu_mean < cpu_thresh)
+}
+
+⍝ CPU burst concentrated on a single core.
+CpuSingleCoreBurst ← { tensor spike_thresh other_thresh;
+  d ← ToDeltas tensor
+  cpu ← (MetricSlice d UTIME) + (MetricSlice d STIME)
+  cpu_tlast ← cpu ⍉ ⟨1,2,0⟩
+  peak ← ⌈´ cpu_tlast
+  maxc ← ⌈´ peak
+  other ← (+´ peak) - maxc
+  valid ← (maxc > spike_thresh) ∧ (other < other_thresh)
+  C ← 1 ⊑ ≢ peak
+  core_mask ← peak =⌜ maxc
+  validC ← valid ⌜⊣ ↕C
+  core_mask ∧ validC
+}
+
+⍝ Thread explosion: sudden large increases in thread count.
+ThreadExplosion ← { tensor delta_thresh;
+  threads ← MetricSlice tensor NUM_THREADS
+  d ← (1↓threads) - (¯1↓threads)
+  tlast ← d ⍉ ⟨1,2,0⟩
+  peak ← ⌈´ tlast
+  peak > delta_thresh
 }
 
 ⍝ Density rendering helpers.

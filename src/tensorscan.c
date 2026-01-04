@@ -24,6 +24,20 @@
 
 static __thread int ts_warned_io_perm = 0;
 static long ts_page_size = -1;
+static __thread pid_t *ts_pid_buf = NULL;
+static __thread size_t ts_pid_cap = 0;
+
+struct ts_prev_row {
+  pid_t pid;
+  unsigned long long starttime;
+  double metrics[TS_METRIC_COUNT];
+};
+
+static __thread struct ts_prev_row *ts_prev_rows = NULL;
+static __thread size_t ts_prev_cap = 0;
+static __thread size_t ts_prev_count = 0;
+static __thread struct ts_prev_row *ts_curr_rows = NULL;
+static __thread size_t ts_curr_cap = 0;
 
 static int ts_is_numeric(const char *s) {
   if (!s || *s == '\0') {
@@ -34,6 +48,45 @@ static int ts_is_numeric(const char *s) {
       return 0;
     }
   }
+  return 1;
+}
+
+static int ts_parse_pid(const char *s, pid_t *pid_out) {
+  char *endptr = NULL;
+  long val = 0;
+
+  errno = 0;
+  val = strtol(s, &endptr, 10);
+  if (errno != 0 || endptr == s || *endptr != '\0') {
+    return 0;
+  }
+  if (val <= 0 || val > INT_MAX) {
+    return 0;
+  }
+  *pid_out = (pid_t)val;
+  return 1;
+}
+
+static int ts_cmp_pids(const void *a, const void *b) {
+  pid_t pa = *(const pid_t *)a;
+  pid_t pb = *(const pid_t *)b;
+  return (pa < pb) ? -1 : (pa > pb);
+}
+
+static int ts_ensure_pid_capacity(size_t needed) {
+  if (needed <= ts_pid_cap) {
+    return 1;
+  }
+  size_t new_cap = ts_pid_cap ? ts_pid_cap : 1024;
+  while (new_cap < needed) {
+    new_cap *= 2;
+  }
+  pid_t *tmp = realloc(ts_pid_buf, new_cap * sizeof(pid_t));
+  if (!tmp) {
+    return 0;
+  }
+  ts_pid_buf = tmp;
+  ts_pid_cap = new_cap;
   return 1;
 }
 
@@ -100,7 +153,7 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
       if (endptr != token) {
         found++;
       } else {
-        *processor = -1; /* Parsing failed but we don't necessarily abort */
+        *processor = -1;
       }
     }
     field++;
@@ -112,34 +165,36 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
   return found >= 5; /* 5 if processor failed, 6 if worked */
 }
 
-static void ts_read_status(pid_t pid, unsigned long long *num_threads,
-                           unsigned long long *vol_ctx,
-                           unsigned long long *nonvol_ctx) {
+static void ts_read_status(pid_t pid, long long *num_threads,
+                           long long *vol_ctx, long long *nonvol_ctx,
+                           long long *uid, long long *ppid) {
   char path[TS_PATH_MAX];
   char buf[512];
   FILE *f = NULL;
 
-  *num_threads = 0;
-  *vol_ctx = 0;
-  *nonvol_ctx = 0;
+  *num_threads = -1;
+  *vol_ctx = -1;
+  *nonvol_ctx = -1;
+  *uid = -1;
+  *ppid = -1;
 
   snprintf(path, sizeof(path), "/proc/%d/status", pid);
   f = fopen(path, "r");
   if (!f) {
-    /* Any failure to open results in -1 to distinguish from zeroed counters */
-    *num_threads = (unsigned long long)-1;
-    *vol_ctx = (unsigned long long)-1;
-    *nonvol_ctx = (unsigned long long)-1;
     return;
   }
 
   while (fgets(buf, sizeof(buf), f)) {
     if (strncmp(buf, "Threads:", 8) == 0) {
-      *num_threads = strtoull(buf + 8, NULL, 10);
+      *num_threads = strtoll(buf + 8, NULL, 10);
     } else if (strncmp(buf, "voluntary_ctxt_switches:", 24) == 0) {
-      *vol_ctx = strtoull(buf + 24, NULL, 10);
+      *vol_ctx = strtoll(buf + 24, NULL, 10);
     } else if (strncmp(buf, "nonvoluntary_ctxt_switches:", 27) == 0) {
-      *nonvol_ctx = strtoull(buf + 27, NULL, 10);
+      *nonvol_ctx = strtoll(buf + 27, NULL, 10);
+    } else if (strncmp(buf, "Uid:", 4) == 0) {
+      *uid = strtoll(buf + 4, NULL, 10);
+    } else if (strncmp(buf, "PPid:", 5) == 0) {
+      *ppid = strtoll(buf + 5, NULL, 10);
     }
   }
 
@@ -181,29 +236,64 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   fclose(f);
 }
 
-static int ts_cmp_pids(const void *a, const void *b) {
-  pid_t pa = *(const pid_t *)a;
-  pid_t pb = *(const pid_t *)b;
-  return (pa < pb) ? -1 : (pa > pb);
+struct ts_filter {
+  double pid_min;
+  double pid_max;
+  double only_uid;
+  const double *pid_whitelist;
+  size_t whitelist_count;
+};
+
+static int ts_pid_in_whitelist(pid_t pid, const double *list, size_t count) {
+  if (!list || count == 0) {
+    return 1;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if ((pid_t)list[i] == pid) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
-size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
-                   double *pid_out) {
+static int ts_ensure_rows_capacity(struct ts_prev_row **rows, size_t *cap,
+                                   size_t needed) {
+  if (needed <= *cap) {
+    return 1;
+  }
+  size_t new_cap = *cap ? *cap : 1024;
+  while (new_cap < needed) {
+    new_cap *= 2;
+  }
+  struct ts_prev_row *tmp = realloc(*rows, new_cap * sizeof(*tmp));
+  if (!tmp) {
+    return 0;
+  }
+  *rows = tmp;
+  *cap = new_cap;
+  return 1;
+}
+
+static size_t ts_snapshot_impl(double *out, size_t max_rows, size_t max_cols,
+                               double *pid_out, const struct ts_filter *filter,
+                               int delta_mode) {
   DIR *dir = NULL;
   struct dirent *ent = NULL;
-  pid_t *pids = NULL;
-  size_t pids_cap = 1024;
-  size_t pids_count = 0;
   size_t found_successes = 0;
+  size_t pids_count = 0;
+  size_t prev_i = 0;
+  size_t curr_count = 0;
   size_t row = 0;
-  size_t i;
-
-  if (ts_page_size < 0) {
-    ts_page_size = sysconf(_SC_PAGESIZE);
-  }
 
   if (!out || max_cols < TS_METRIC_COUNT) {
     return 0;
+  }
+
+  if (ts_page_size < 0) {
+    ts_page_size = sysconf(_SC_PAGESIZE);
+    if (ts_page_size <= 0) {
+      ts_page_size = 4096;
+    }
   }
 
   dir = opendir("/proc");
@@ -211,69 +301,186 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     return 0;
   }
 
-  pids = malloc(pids_cap * sizeof(pid_t));
-  if (!pids) {
-    closedir(dir);
-    return 0;
-  }
-
   while ((ent = readdir(dir)) != NULL) {
+    pid_t pid = 0;
     if (!ts_is_numeric(ent->d_name)) {
       continue;
     }
-    if (pids_count >= pids_cap) {
-      pids_cap *= 2;
-      pid_t *tmp = realloc(pids, pids_cap * sizeof(pid_t));
-      if (!tmp) {
-        break;
-      }
-      pids = tmp;
+    if (!ts_parse_pid(ent->d_name, &pid)) {
+      continue;
     }
-    pids[pids_count++] = (pid_t)strtol(ent->d_name, NULL, 10);
+    if (!ts_ensure_pid_capacity(pids_count + 1)) {
+      break;
+    }
+    ts_pid_buf[pids_count++] = pid;
   }
   closedir(dir);
 
-  qsort(pids, pids_count, sizeof(pid_t), ts_cmp_pids);
+  qsort(ts_pid_buf, pids_count, sizeof(pid_t), ts_cmp_pids);
 
-  for (i = 0; i < pids_count; ++i) {
+  if (delta_mode) {
+    if (!ts_ensure_rows_capacity(&ts_curr_rows, &ts_curr_cap, pids_count)) {
+      delta_mode = 0;
+    }
+  }
+
+  for (size_t i = 0; i < pids_count; ++i) {
     unsigned long long utime = 0, stime = 0, starttime = 0, vsize = 0;
     long long rss_pages = 0;
     int processor = -1;
-    unsigned long long num_threads = 0, vol_ctx = 0, nonvol_ctx = 0;
-    long long read_bytes = 0, write_bytes = 0;
-    pid_t pid = pids[i];
+    long long num_threads = -1, vol_ctx = -1, nonvol_ctx = -1;
+    long long read_bytes = -1, write_bytes = -1;
+    long long uid = -1, ppid = -1;
+    pid_t pid = ts_pid_buf[i];
+    double metrics[TS_METRIC_COUNT];
+    double deltas[TS_METRIC_COUNT];
+    double *row_ptr = NULL;
+    int have_prev = 0;
+    const struct ts_prev_row *prev = NULL;
 
-    if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
-                     &starttime)) {
-      found_successes++;
+    if (filter) {
+      if (filter->pid_min >= 0 && pid < (pid_t)filter->pid_min) {
+        continue;
+      }
+      if (filter->pid_max >= 0 && pid > (pid_t)filter->pid_max) {
+        continue;
+      }
+      if (!ts_pid_in_whitelist(pid, filter->pid_whitelist,
+                               filter->whitelist_count)) {
+        continue;
+      }
+    }
 
-      if (row < max_rows) {
-        ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
-        ts_read_io(pid, &read_bytes, &write_bytes);
+    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                      &starttime)) {
+      continue;
+    }
 
-        double *row_ptr = out + (row * max_cols);
-        row_ptr[TS_UTIME] = (double)utime;
-        row_ptr[TS_STIME] = (double)stime;
-        row_ptr[TS_RSS] = (double)rss_pages * (double)ts_page_size;
-        row_ptr[TS_VSIZE] = (double)vsize;
-        row_ptr[TS_NUM_THREADS] = (double)num_threads;
-        row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
-        row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
-        row_ptr[TS_PROCESSOR] = (double)processor;
-        row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
-        row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
-        row_ptr[TS_STARTTIME] = (double)starttime;
+    ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx, &uid, &ppid);
 
-        if (pid_out) {
-          pid_out[row] = (double)pid;
+    if (filter && filter->only_uid >= 0) {
+      if (uid < 0 || uid != (long long)filter->only_uid) {
+        continue;
+      }
+    }
+
+    ts_read_io(pid, &read_bytes, &write_bytes);
+
+    metrics[TS_UTIME] = (double)utime;
+    metrics[TS_STIME] = (double)stime;
+    metrics[TS_RSS] = (double)rss_pages * (double)ts_page_size;
+    metrics[TS_VSIZE] = (double)vsize;
+    metrics[TS_NUM_THREADS] = (double)num_threads;
+    metrics[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
+    metrics[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
+    metrics[TS_PROCESSOR] = (double)processor;
+    metrics[TS_IO_READ_BYTES] = (double)read_bytes;
+    metrics[TS_IO_WRITE_BYTES] = (double)write_bytes;
+    metrics[TS_STARTTIME] = (double)starttime;
+    metrics[TS_UID] = (double)uid;
+    metrics[TS_PPID] = (double)ppid;
+
+    found_successes++;
+
+    if (delta_mode) {
+      while (prev_i < ts_prev_count && ts_prev_rows[prev_i].pid < pid) {
+        prev_i++;
+      }
+      if (prev_i < ts_prev_count && ts_prev_rows[prev_i].pid == pid &&
+          ts_prev_rows[prev_i].starttime == starttime) {
+        have_prev = 1;
+        prev = &ts_prev_rows[prev_i];
+      }
+
+      for (size_t m = 0; m < TS_METRIC_COUNT; ++m) {
+        deltas[m] = metrics[m];
+      }
+
+      const int counter_metrics[] = {TS_UTIME, TS_STIME, TS_VOL_CTX_SWITCHES,
+                                     TS_NONVOL_CTX_SWITCHES, TS_IO_READ_BYTES,
+                                     TS_IO_WRITE_BYTES};
+      for (size_t c = 0; c < sizeof(counter_metrics) / sizeof(counter_metrics[0]);
+           ++c) {
+        int idx = counter_metrics[c];
+        double curr = metrics[idx];
+        if (curr < 0) {
+          deltas[idx] = -1;
+          continue;
         }
-        row++;
+        if (!have_prev || !prev || prev->metrics[idx] < 0) {
+          deltas[idx] = 0;
+          continue;
+        }
+        double delta = curr - prev->metrics[idx];
+        if (delta < 0) {
+          delta = 0;
+        }
+        deltas[idx] = delta;
+      }
+    }
+
+    if (row < max_rows) {
+      row_ptr = out + (row * max_cols);
+      if (delta_mode) {
+        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) {
+          row_ptr[m] = deltas[m];
+        }
+      } else {
+        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) {
+          row_ptr[m] = metrics[m];
+        }
+      }
+      if (pid_out) {
+        pid_out[row] = (double)pid;
+      }
+      row++;
+    }
+
+    if (delta_mode) {
+      if (curr_count < ts_curr_cap) {
+        ts_curr_rows[curr_count].pid = pid;
+        ts_curr_rows[curr_count].starttime = starttime;
+        for (size_t m = 0; m < TS_METRIC_COUNT; ++m) {
+          ts_curr_rows[curr_count].metrics[m] = metrics[m];
+        }
+        curr_count++;
       }
     }
   }
 
-  free(pids);
+  if (delta_mode) {
+    struct ts_prev_row *tmp = ts_prev_rows;
+    ts_prev_rows = ts_curr_rows;
+    ts_curr_rows = tmp;
+    ts_prev_count = curr_count;
+  }
+
   return found_successes;
+}
+
+size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
+                   double *pid_out) {
+  return ts_snapshot_impl(out, max_rows, max_cols, pid_out, NULL, 0);
+}
+
+size_t ts_snapshot_filtered(double *out, size_t max_rows, size_t max_cols,
+                            double *pid_out, double pid_min, double pid_max,
+                            const double *pid_whitelist,
+                            size_t whitelist_count, double only_uid) {
+  struct ts_filter filter;
+
+  filter.pid_min = pid_min;
+  filter.pid_max = pid_max;
+  filter.only_uid = only_uid;
+  filter.pid_whitelist = pid_whitelist;
+  filter.whitelist_count = whitelist_count;
+
+  return ts_snapshot_impl(out, max_rows, max_cols, pid_out, &filter, 0);
+}
+
+size_t ts_snapshot_delta(double *out, size_t max_rows, size_t max_cols,
+                         double *pid_out) {
+  return ts_snapshot_impl(out, max_rows, max_cols, pid_out, NULL, 1);
 }
 
 void ts_usleep(unsigned int usec) {
@@ -294,6 +501,93 @@ double ts_get_monotonic_time(void) {
 }
 
 size_t ts_get_metric_count(void) { return TS_METRIC_COUNT; }
+
+unsigned long long ts_get_total_cpu_ticks(void) {
+  FILE *f = fopen("/proc/stat", "r");
+  if (!f) {
+    return 0;
+  }
+  char buf[512];
+  unsigned long long total = 0;
+  if (fgets(buf, sizeof(buf), f)) {
+    if (strncmp(buf, "cpu ", 4) == 0) {
+      char *rest = buf + 4;
+      char *token = NULL;
+      while ((token = strsep(&rest, " ")) != NULL) {
+        if (*token == '\0') {
+          continue;
+        }
+        total += strtoull(token, NULL, 10);
+      }
+    }
+  }
+  fclose(f);
+  return total;
+}
+
+unsigned long long ts_get_mem_total_bytes(void) {
+  FILE *f = fopen("/proc/meminfo", "r");
+  if (!f) {
+    return 0;
+  }
+  char buf[256];
+  unsigned long long kb = 0;
+  while (fgets(buf, sizeof(buf), f)) {
+    if (strncmp(buf, "MemTotal:", 9) == 0) {
+      kb = strtoull(buf + 9, NULL, 10);
+      break;
+    }
+  }
+  fclose(f);
+  return kb * 1024ULL;
+}
+
+static size_t ts_read_file_trim(const char *path, char *out, size_t out_len,
+                                int replace_nul) {
+  FILE *f = fopen(path, "r");
+  if (!f || !out || out_len == 0) {
+    if (f) {
+      fclose(f);
+    }
+    return 0;
+  }
+  size_t n = fread(out, 1, out_len - 1, f);
+  fclose(f);
+  if (n == 0) {
+    out[0] = '\0';
+    return 0;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (out[i] == '\n') {
+      out[i] = ' ';
+    } else if (replace_nul && out[i] == '\0') {
+      out[i] = ' ';
+    }
+  }
+  while (n > 0 && out[n - 1] == ' ') {
+    n--;
+  }
+  out[n] = '\0';
+  return n;
+}
+
+size_t ts_read_comm(pid_t pid, char *out, size_t out_len) {
+  char path[TS_PATH_MAX];
+  snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+  return ts_read_file_trim(path, out, out_len, 0);
+}
+
+size_t ts_read_cmdline(pid_t pid, char *out, size_t out_len) {
+  char path[TS_PATH_MAX];
+  snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+  return ts_read_file_trim(path, out, out_len, 1);
+}
+
+size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len) {
+  char path[TS_PATH_MAX];
+  snprintf(path, sizeof(path), "/proc/%d/cgroup", pid);
+  return ts_read_file_trim(path, out, out_len, 0);
+}
 
 size_t ts_core_count(size_t ignored) {
   long n = 0;
