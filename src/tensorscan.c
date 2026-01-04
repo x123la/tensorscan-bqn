@@ -150,9 +150,8 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
       *read_bytes = -1;
       *write_bytes = -1;
       if (!ts_warned_io_perm) {
-        fprintf(stderr,
-                "TensorScan: /proc/[pid]/io requires permission; "
-                "I/O metrics set to -1.\n");
+        fprintf(stderr, "TensorScan: /proc/[pid]/io requires permission; "
+                        "I/O metrics set to -1.\n");
         ts_warned_io_perm = 1;
       }
     }
@@ -170,23 +169,34 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   fclose(f);
 }
 
+static int ts_pid_filter(const struct dirent *ent) {
+  return ts_is_numeric(ent->d_name);
+}
+
+static int ts_pid_sort(const struct dirent **a, const struct dirent **b) {
+  long pa = strtol((*a)->d_name, NULL, 10);
+  long pb = strtol((*b)->d_name, NULL, 10);
+  return (pa < pb) ? -1 : (pa > pb);
+}
+
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out) {
-  DIR *dir = NULL;
-  struct dirent *ent = NULL;
+  struct dirent **namelist = NULL;
+  int n = 0;
   size_t row = 0;
   long page_size = sysconf(_SC_PAGESIZE);
+  int i;
 
   if (!out || max_cols < TS_METRIC_COUNT) {
     return 0;
   }
 
-  dir = opendir("/proc");
-  if (!dir) {
+  n = scandir("/proc", &namelist, ts_pid_filter, ts_pid_sort);
+  if (n < 0) {
     return 0;
   }
 
-  while ((ent = readdir(dir)) != NULL) {
+  for (i = 0; i < n; i++) {
     unsigned long long utime = 0;
     unsigned long long stime = 0;
     unsigned long long starttime = 0;
@@ -201,45 +211,44 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     pid_t pid = 0;
     double *row_ptr = NULL;
 
-    if (!ts_is_numeric(ent->d_name)) {
-      continue;
-    }
     if (row >= max_rows) {
-      break;
-    }
-
-    pid = (pid_t)strtol(ent->d_name, NULL, 10);
-    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
-                      &starttime)) {
+      free(namelist[i]);
       continue;
     }
 
-    ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
-    ts_read_io(pid, &read_bytes, &write_bytes);
+    pid = (pid_t)strtol(namelist[i]->d_name, NULL, 10);
+    if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                     &starttime)) {
+      ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
+      ts_read_io(pid, &read_bytes, &write_bytes);
 
-    row_ptr = out + (row * max_cols);
-    row_ptr[TS_UTIME] = (double)utime;
-    row_ptr[TS_STIME] = (double)stime;
-    row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
-    row_ptr[TS_VSIZE] = (double)vsize;
-    row_ptr[TS_NUM_THREADS] = (double)num_threads;
-    row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
-    row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
-    row_ptr[TS_PROCESSOR] = (double)processor;
-    row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
-    row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
-    row_ptr[TS_STARTTIME] = (double)starttime;
+      row_ptr = out + (row * max_cols);
+      row_ptr[TS_UTIME] = (double)utime;
+      row_ptr[TS_STIME] = (double)stime;
+      row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
+      row_ptr[TS_VSIZE] = (double)vsize;
+      row_ptr[TS_NUM_THREADS] = (double)num_threads;
+      row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
+      row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
+      row_ptr[TS_PROCESSOR] = (double)processor;
+      row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
+      row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
+      row_ptr[TS_STARTTIME] = (double)starttime;
 
-    if (pid_out) {
-      pid_out[row] = (double)pid;
+      if (pid_out) {
+        pid_out[row] = (double)pid;
+      }
+
+      row++;
     }
-
-    row++;
+    free(namelist[i]);
   }
+  free(namelist);
 
-  closedir(dir);
   return row;
 }
+
+void ts_usleep(unsigned int usec) { usleep(usec); }
 
 size_t ts_core_count(size_t ignored) {
   long n = 0;

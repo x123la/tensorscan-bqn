@@ -9,8 +9,9 @@
 lib ← •FFI "./libtensorscan.so"
 
 ⍝ "p" = pointer, "n" = size_t (native word). Return is size_t.
-ts_snapshot ← lib ⟨"ts_snapshot", "pnnP>n"⟩
+ts_snapshot ← lib ⟨"ts_snapshot", "pnnp>n"⟩
 ts_core_count ← lib ⟨"ts_core_count", "n>n"⟩
+ts_usleep ← lib ⟨"ts_usleep", "n>"⟩
 
 CoreCount ← ts_core_count 0
 
@@ -40,7 +41,10 @@ Snapshot ← { rows cols;
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.
 Capture ← { t rows cols;
-  step ← { acc _; acc ∾ ⟨Snapshot rows cols⟩ }
+  step ← { acc _;
+    ts_usleep 10000
+    acc ∾ ⟨Snapshot rows cols⟩
+  }
   ⟨⟩ step´ ↕t
 }
 
@@ -81,11 +85,9 @@ AlignSnapshot ← { snap all_keys;
   mat ← 2 ⊑ snap
   (P‿M) ← ≢ mat
   idx ← keys ⊐ all_keys
-  valid ← idx < P
-  safe_idx ← idx × valid
   mat0 ← mat ∾ (1‿M) ⥊ 0
-  rows ← safe_idx ⊏ mat0
-  valid × rows
+  rows ← idx ⊏ mat0
+  rows
 }
 
 ⍝ Align a list of snapshots to a stable PID axis.
@@ -221,7 +223,8 @@ MapDensity ← { vals;
 ⍝ Render a time×pid heatmap for a chosen metric.
 DensityMatrix ← { tensor metric_idx;
   metric ← MetricSlice (ToDeltas tensor) metric_idx
-  +´ metric
+  ⍝ Metric has shape T×P×C. Collapse C (take max) to get T×P.
+  ⌈´ (metric ⍉ ⟨2,0,1⟩)
 }
 
 DensityView ← { tensor metric_idx;

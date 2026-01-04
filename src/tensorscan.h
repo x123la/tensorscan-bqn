@@ -38,6 +38,9 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
 /* Return number of online processors; takes a dummy argument for FFI. */
 size_t ts_core_count(size_t ignored);
 
+/* Sleep for usec useconds. */
+void ts_usleep(unsigned int usec);
+
 #ifdef __cplusplus
 }
 #endif
