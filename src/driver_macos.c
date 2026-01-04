@@ -79,8 +79,11 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
         r[TS_VOL_CTX_SWITCHES] = (double)ti.pti_csw;
         r[TS_NONVOL_CTX_SWITCHES] = 0; // Not easily available on mach
         r[TS_PROCESSOR] = (double)ti.pti_policy; // Not exactly core ID, but scheduling policy
-        r[TS_IO_READ_BYTES] = 0; // Requires root/DTrace
-        r[TS_IO_WRITE_BYTES] = 0;
+        struct rusage_info_v4 ri;
+        if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&ri) == 0) {
+            r[TS_IO_READ_BYTES] = (double)ri.ri_diskio_bytesread;
+            r[TS_IO_WRITE_BYTES] = (double)ri.ri_diskio_byteswritten;
+        }
         r[TS_STARTTIME] = (double)bi.pbi_start_tvsec;
         r[TS_UID] = (double)bi.pbi_uid;
         r[TS_PPID] = (double)bi.pbi_ppid;
