@@ -12,33 +12,33 @@ TensorScan is designed as a layered pipeline, ensuring minimal overhead at the c
 
 ```mermaid
 graph TD
-    subgraph "OS Layer"
+    subgraph OS_Layer ["OS Layer"]
         Linux["/proc File System"]
         macOS["libproc / proc_info"]
     end
 
-    subgraph "Data Acquisition (C Shim)"
+    subgraph Data_Acquisition ["Data Acquisition (C Shim)"]
         C["libtensorscan.so"]
         Drivers["Platform Drivers (Linux/macOS)"]
         FFI["FFI Layer (C API)"]
     end
 
-    subgraph "Analysis Engine (BQN)"
+    subgraph Analysis_Engine ["Analysis Engine (BQN)"]
         BQN["lib/tensor.bqn"]
         Align["PID×StartTime Alignment"]
         Tensor["4D Tensor Construction (T×P×M×C)"]
         Normalization["Time-Delta Normalization"]
     end
 
-    subgraph "Visualization & TUI"
+    subgraph Visualization_TUI ["Visualization & TUI"]
         TUI["lib/top.bqn"]
         Heatmap["DensityView Heatmaps"]
     end
 
-    OS Layer --> Data Acquisition
+    OS_Layer --> Data_Acquisition
     Drivers --> FFI
     FFI --> BQN
-    BQN --> Visualization & TUI
+    BQN --> Visualization_TUI
 ```
 
 ---
