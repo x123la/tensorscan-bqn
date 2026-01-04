@@ -39,9 +39,13 @@ IO_WRITE_BYTES       ← GetMetricIndex "io_write"
 STARTTIME            ← GetMetricIndex "starttime"
 UID                  ← GetMetricIndex "uid"
 PPID                 ← GetMetricIndex "ppid"
+PRIORITY             ← GetMetricIndex "priority"
+NICE                 ← GetMetricIndex "nice"
+MINFLT               ← GetMetricIndex "minflt"
+MAJFLT               ← GetMetricIndex "majflt"
 
 CounterMetrics ← ⟨UTIME, STIME, VOL_CTX_SWITCHES, NONVOL_CTX_SWITCHES,
-  IO_READ_BYTES, IO_WRITE_BYTES⟩
+  IO_READ_BYTES, IO_WRITE_BYTES, MINFLT, MAJFLT⟩
 
 ReadComm ← { pid:
   buf ← 256 ⥊ 0
@@ -108,8 +112,8 @@ SnapshotDelta ← { rows cols;
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.
 ⍝ Uses a monotonic clock to avoid timing drift.
-Capture ← { t rows cols;
-  interval ← 0.01 ⍝ 10ms
+⍝ Now accepts 'interval' (in seconds) as an argument.
+Capture ← { t rows cols interval;
   start ← ts_get_monotonic_time 0
   step ← { ⟨acc, next⟩ _;
     wait ← 0 ⌈ next - ts_get_monotonic_time 0

@@ -4,12 +4,19 @@ LDFLAGS ?= -shared
 BQN ?= cbqn
 
 TARGET := libtensorscan.so
-SRC := src/tensorscan.c
+SRC_COMMON := src/ffi_layer.c
+
+UNAME := $(shell uname)
+ifeq ($(UNAME), Linux)
+    SRC_DRIVER := src/driver_linux.c
+else
+    $(error "OS not supported yet")
+endif
 
 all: $(TARGET)
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+$(TARGET): $(SRC_COMMON) $(SRC_DRIVER)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 run: $(TARGET)
 	@command -v $(BQN) >/dev/null 2>&1 || { \

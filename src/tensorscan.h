@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define TS_METRIC_COUNT 13
+#define TS_METRIC_COUNT 17
 
 enum ts_metric_index {
   TS_UTIME = 0,
@@ -23,7 +23,11 @@ enum ts_metric_index {
   TS_IO_WRITE_BYTES = 9,
   TS_STARTTIME = 10,
   TS_UID = 11,
-  TS_PPID = 12
+  TS_PPID = 12,
+  TS_PRIORITY = 13,
+  TS_NICE = 14,
+  TS_MINFLT = 15,
+  TS_MAJFLT = 16
 };
 
 /*
