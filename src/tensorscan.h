@@ -2,6 +2,7 @@
 #define TENSORSCAN_H
 
 #include <stddef.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,8 +30,9 @@ enum ts_metric_index {
  * Layout: row-major matrix of shape [max_rows][max_cols].
  * Columns follow enum ts_metric_index. Values are stored as double.
  *
- * Returns the number of rows filled. If pid_out is non-NULL, it is filled
- * with the corresponding PIDs (length max_rows), as doubles.
+ * Returns the TOTAL number of successfully parsed processes found on
+ * the system. If this is > max_rows, the data was truncated to max_rows.
+ * If pid_out is non-NULL, it is filled with corresponding PIDs.
  */
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out);

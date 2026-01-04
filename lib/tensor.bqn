@@ -40,7 +40,11 @@ Snapshot ← { rows cols;
   pids ← rows ⥊ 0
   count ← ts_snapshot buf rows cols pids
   _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
-  ⟨count, (rows⌊count) ↑ pids, (rows⌊count) ↑ buf⟩
+  pids_s ← (rows⌊count) ↑ pids
+  buf_s ← (rows⌊count) ↑ buf
+  ⍝ Safety: filter out any rows with pid=0 or starttime=0 to prevent alignment pollution.
+  keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
+  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
 }
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.

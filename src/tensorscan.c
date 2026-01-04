@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include "tensorscan.h"
 
 #include <ctype.h>
@@ -7,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #if !defined(__linux__)
@@ -19,9 +22,8 @@
 #define TS_PATH_MAX PATH_MAX
 #endif
 
-#include <time.h>
-
 static __thread int ts_warned_io_perm = 0;
+static long ts_page_size = -1;
 
 static int ts_is_numeric(const char *s) {
   if (!s || *s == '\0') {
@@ -93,8 +95,13 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
       *rss_pages = strtoll(token, NULL, 10);
       found++;
     } else if (field == 39) {
-      *processor = (int)strtoll(token, NULL, 10);
-      found++;
+      char *endptr = NULL;
+      *processor = (int)strtol(token, &endptr, 10);
+      if (endptr != token) {
+        found++;
+      } else {
+        *processor = -1; /* Parsing failed but we don't necessarily abort */
+      }
     }
     field++;
     if (field > 39) {
@@ -102,7 +109,7 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
     }
   }
 
-  return found >= 6;
+  return found >= 5; /* 5 if processor failed, 6 if worked */
 }
 
 static void ts_read_status(pid_t pid, unsigned long long *num_threads,
@@ -119,6 +126,10 @@ static void ts_read_status(pid_t pid, unsigned long long *num_threads,
   snprintf(path, sizeof(path), "/proc/%d/status", pid);
   f = fopen(path, "r");
   if (!f) {
+    /* Any failure to open results in -1 to distinguish from zeroed counters */
+    *num_threads = (unsigned long long)-1;
+    *vol_ctx = (unsigned long long)-1;
+    *nonvol_ctx = (unsigned long long)-1;
     return;
   }
 
@@ -141,15 +152,13 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   char buf[512];
   FILE *f = NULL;
 
-  *read_bytes = 0;
-  *write_bytes = 0;
+  *read_bytes = -1;
+  *write_bytes = -1;
 
   snprintf(path, sizeof(path), "/proc/%d/io", pid);
   f = fopen(path, "r");
   if (!f) {
     if (errno == EACCES || errno == EPERM) {
-      *read_bytes = -1;
-      *write_bytes = -1;
       if (!ts_warned_io_perm) {
         fprintf(stderr, "TensorScan: /proc/[pid]/io requires permission; "
                         "I/O metrics set to -1.\n");
@@ -159,6 +168,8 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
     return;
   }
 
+  *read_bytes = 0;
+  *write_bytes = 0;
   while (fgets(buf, sizeof(buf), f)) {
     if (strncmp(buf, "read_bytes:", 11) == 0) {
       *read_bytes = strtoll(buf + 11, NULL, 10);
@@ -170,13 +181,26 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   fclose(f);
 }
 
+static int ts_cmp_pids(const void *a, const void *b) {
+  pid_t pa = *(const pid_t *)a;
+  pid_t pb = *(const pid_t *)b;
+  return (pa < pb) ? -1 : (pa > pb);
+}
+
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out) {
   DIR *dir = NULL;
   struct dirent *ent = NULL;
+  pid_t *pids = NULL;
+  size_t pids_cap = 1024;
+  size_t pids_count = 0;
+  size_t found_successes = 0;
   size_t row = 0;
-  size_t total_found = 0;
-  long page_size = sysconf(_SC_PAGESIZE);
+  size_t i;
+
+  if (ts_page_size < 0) {
+    ts_page_size = sysconf(_SC_PAGESIZE);
+  }
 
   if (!out || max_cols < TS_METRIC_COUNT) {
     return 0;
@@ -187,36 +211,50 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     return 0;
   }
 
-  while ((ent = readdir(dir)) != NULL) {
-    unsigned long long utime = 0;
-    unsigned long long stime = 0;
-    unsigned long long starttime = 0;
-    unsigned long long vsize = 0;
-    long long rss_pages = 0;
-    int processor = -1;
-    unsigned long long num_threads = 0;
-    unsigned long long vol_ctx = 0;
-    unsigned long long nonvol_ctx = 0;
-    long long read_bytes = 0;
-    long long write_bytes = 0;
-    pid_t pid = 0;
-    double *row_ptr = NULL;
+  pids = malloc(pids_cap * sizeof(pid_t));
+  if (!pids) {
+    closedir(dir);
+    return 0;
+  }
 
+  while ((ent = readdir(dir)) != NULL) {
     if (!ts_is_numeric(ent->d_name)) {
       continue;
     }
+    if (pids_count >= pids_cap) {
+      pids_cap *= 2;
+      pid_t *tmp = realloc(pids, pids_cap * sizeof(pid_t));
+      if (!tmp) {
+        break;
+      }
+      pids = tmp;
+    }
+    pids[pids_count++] = (pid_t)strtol(ent->d_name, NULL, 10);
+  }
+  closedir(dir);
 
-    if (row < max_rows) {
-      pid = (pid_t)strtol(ent->d_name, NULL, 10);
-      if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
-                       &starttime)) {
+  qsort(pids, pids_count, sizeof(pid_t), ts_cmp_pids);
+
+  for (i = 0; i < pids_count; ++i) {
+    unsigned long long utime = 0, stime = 0, starttime = 0, vsize = 0;
+    long long rss_pages = 0;
+    int processor = -1;
+    unsigned long long num_threads = 0, vol_ctx = 0, nonvol_ctx = 0;
+    long long read_bytes = 0, write_bytes = 0;
+    pid_t pid = pids[i];
+
+    if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                     &starttime)) {
+      found_successes++;
+
+      if (row < max_rows) {
         ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
         ts_read_io(pid, &read_bytes, &write_bytes);
 
-        row_ptr = out + (row * max_cols);
+        double *row_ptr = out + (row * max_cols);
         row_ptr[TS_UTIME] = (double)utime;
         row_ptr[TS_STIME] = (double)stime;
-        row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
+        row_ptr[TS_RSS] = (double)rss_pages * (double)ts_page_size;
         row_ptr[TS_VSIZE] = (double)vsize;
         row_ptr[TS_NUM_THREADS] = (double)num_threads;
         row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
@@ -229,23 +267,22 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
         if (pid_out) {
           pid_out[row] = (double)pid;
         }
-
         row++;
       }
     }
-    total_found++;
   }
 
-  closedir(dir);
-  /* Return total found processes to inform BQN about truncation. */
-  return total_found;
+  free(pids);
+  return found_successes;
 }
 
 void ts_usleep(unsigned int usec) {
-  struct timespec ts;
-  ts.tv_sec = (time_t)(usec / 1000000);
-  ts.tv_nsec = (long)((usec % 1000000) * 1000);
-  nanosleep(&ts, NULL);
+  struct timespec req, rem;
+  req.tv_sec = (time_t)(usec / 1000000);
+  req.tv_nsec = (long)((usec % 1000000) * 1000);
+  while (nanosleep(&req, &rem) == -1 && errno == EINTR) {
+    req = rem;
+  }
 }
 
 double ts_get_monotonic_time(void) {
@@ -260,12 +297,10 @@ size_t ts_get_metric_count(void) { return TS_METRIC_COUNT; }
 
 size_t ts_core_count(size_t ignored) {
   long n = 0;
-
   (void)ignored;
   n = sysconf(_SC_NPROCESSORS_ONLN);
   if (n < 1) {
     n = 1;
   }
-
   return (size_t)n;
 }
