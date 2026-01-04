@@ -21,6 +21,9 @@ show_rows ← count⌊rows
 
 ⍝ Time-series capture + heatmap
 snaps ← ts.Capture 5 rows cols
-_keys tensor ← ts.Tensor4D snaps cores
+_keys times tensor ← ts.Tensor4D snaps cores
 •Show "utime_density"
-ts.DensityView tensor ts.UTIME
+ts.DensityView (times‿tensor) ts.UTIME
+
+⍝ Clean up thread-local C buffers
+ts.ts_free_thread_resources 0

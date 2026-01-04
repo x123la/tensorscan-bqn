@@ -587,6 +587,21 @@ size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len) {
   return ts_read_file_trim(path, out, out_len, 0);
 }
 
+int ts_get_metric_index(const char *name) {
+  if (!name) return -1;
+  const char *metrics[] = {
+      "utime", "stime", "rss", "vsize", "num_threads",
+      "vol_ctx", "nonvol_ctx", "processor", "io_read",
+      "io_write", "starttime", "uid", "ppid"
+  };
+  for (int i = 0; i < TS_METRIC_COUNT; ++i) {
+    if (strcmp(name, metrics[i]) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 size_t ts_core_count(size_t ignored) {
   long n = 0;
   (void)ignored;

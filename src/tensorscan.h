@@ -78,6 +78,9 @@ size_t ts_read_comm(pid_t pid, char *out, size_t out_len);
 size_t ts_read_cmdline(pid_t pid, char *out, size_t out_len);
 size_t ts_read_cgroup(pid_t pid, char *out, size_t out_len);
 
+/* Get index of a metric by name. Returns -1 if not found. */
+int ts_get_metric_index(const char *name);
+
 /* Free thread-local buffers. Call before thread exit to avoid leaks. */
 void ts_free_thread_resources(size_t ignored);
 

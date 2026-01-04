@@ -21,7 +21,27 @@ ts_get_mem_total_bytes ← lib ⟨"ts_get_mem_total_bytes", "n>n"⟩
 ts_read_comm ← lib ⟨"ts_read_comm", "npn>n"⟩
 ts_read_cmdline ← lib ⟨"ts_read_cmdline", "npn>n"⟩
 ts_read_cgroup ← lib ⟨"ts_read_cgroup", "npn>n"⟩
+ts_get_metric_index ← lib ⟨"ts_get_metric_index", "p>i"⟩
 ts_free_thread_resources ← lib ⟨"ts_free_thread_resources", "n>"⟩
+
+GetMetricIndex ← { name: ts_get_metric_index name }
+
+UTIME                ← GetMetricIndex "utime"
+STIME                ← GetMetricIndex "stime"
+RSS                  ← GetMetricIndex "rss"
+VSIZE                ← GetMetricIndex "vsize"
+NUM_THREADS          ← GetMetricIndex "num_threads"
+VOL_CTX_SWITCHES     ← GetMetricIndex "vol_ctx"
+NONVOL_CTX_SWITCHES  ← GetMetricIndex "nonvol_ctx"
+PROCESSOR            ← GetMetricIndex "processor"
+IO_READ_BYTES        ← GetMetricIndex "io_read"
+IO_WRITE_BYTES       ← GetMetricIndex "io_write"
+STARTTIME            ← GetMetricIndex "starttime"
+UID                  ← GetMetricIndex "uid"
+PPID                 ← GetMetricIndex "ppid"
+
+CounterMetrics ← ⟨UTIME, STIME, VOL_CTX_SWITCHES, NONVOL_CTX_SWITCHES,
+  IO_READ_BYTES, IO_WRITE_BYTES⟩
 
 ReadComm ← { pid:
   buf ← 256 ⥊ 0
@@ -46,59 +66,44 @@ CoreCount ← ts_core_count 0
 TotalCpuTicks ← ts_get_total_cpu_ticks 0
 MemTotalBytes ← ts_get_mem_total_bytes 0
 
-⍝ Metric indices (mirror tensorscan.h)
-UTIME ← 0
-STIME ← 1
-RSS ← 2
-VSIZE ← 3
-NUM_THREADS ← 4
-VOL_CTX_SWITCHES ← 5
-NONVOL_CTX_SWITCHES ← 6
-PROCESSOR ← 7
-IO_READ_BYTES ← 8
-IO_WRITE_BYTES ← 9
-STARTTIME ← 10
-UID ← 11
-PPID ← 12
-
-CounterMetrics ← ⟨UTIME, STIME, VOL_CTX_SWITCHES, NONVOL_CTX_SWITCHES,
-  IO_READ_BYTES, IO_WRITE_BYTES⟩
-
-⍝ Take one snapshot into a fresh buffer and return ⟨count, pids, matrix⟩.
+⍝ Take one snapshot into a fresh buffer and return ⟨timestamp, count, pids, matrix⟩.
 Snapshot ← { rows cols;
   buf ← (rows‿cols) ⥊ 0
   pids ← rows ⥊ 0
+  t ← ts_get_monotonic_time 0
   count ← ts_snapshot buf rows cols pids
   _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
   pids_s ← (rows⌊count) ↑ pids
   buf_s ← (rows⌊count) ↑ buf
   ⍝ Safety: filter out any rows with pid=0 or starttime=0 to prevent alignment pollution.
   keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
-  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
+  ⟨t, +´ keep, keep / pids_s, keep / buf_s⟩
 }
 
 ⍝ Filtered snapshot. Use ¯1 for pid_min/pid_max/only_uid to disable.
 SnapshotFiltered ← { rows cols pid_min pid_max pid_whitelist only_uid;
   buf ← (rows‿cols) ⥊ 0
   pids ← rows ⥊ 0
+  t ← ts_get_monotonic_time 0
   count ← ts_snapshot_filtered buf rows cols pids pid_min pid_max pid_whitelist (≠pid_whitelist) only_uid
   _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
   pids_s ← (rows⌊count) ↑ pids
   buf_s ← (rows⌊count) ↑ buf
   keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
-  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
+  ⟨t, +´ keep, keep / pids_s, keep / buf_s⟩
 }
 
 ⍝ Delta-ready snapshot (counter metrics are deltas).
 SnapshotDelta ← { rows cols;
   buf ← (rows‿cols) ⥊ 0
   pids ← rows ⥊ 0
+  t ← ts_get_monotonic_time 0
   count ← ts_snapshot_delta buf rows cols pids
   _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
   pids_s ← (rows⌊count) ↑ pids
   buf_s ← (rows⌊count) ↑ buf
   keep ← (pids_s ≠ 0) ∧ (STARTTIME ⊏ ⍉ buf_s) ≠ 0
-  ⟨+´ keep, keep / pids_s, keep / buf_s⟩
+  ⟨t, +´ keep, keep / pids_s, keep / buf_s⟩
 }
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.
@@ -130,8 +135,8 @@ CoreOneHot ← { mat proc_idx cores;
 
 ⍝ Build PID keys using ⟨pid, starttime⟩ pairs.
 PidKeys ← { snap;
-  pids ← 1 ⊑ snap
-  mat ← 2 ⊑ snap
+  pids ← 2 ⊑ snap
+  mat ← 3 ⊑ snap
   start ← STARTTIME ⊏ ⍉ mat
   ⍉ (pids‿start)
 }
@@ -151,7 +156,7 @@ AllPids ← { snaps;
 ⍝ Align a single snapshot's matrix to the stable PID axis.
 AlignSnapshot ← { snap all_keys;
   keys ← PidKeys snap
-  mat ← 2 ⊑ snap
+  mat ← 3 ⊑ snap
   (P‿M) ← ≢ mat
   idx ← keys ⊐ all_keys
   mat0 ← mat ∾ (1‿M) ⥊ 0
@@ -164,17 +169,18 @@ AlignSnapshot ← { snap all_keys;
 ⍝ Align a list of snapshots to a stable PID axis.
 AlignSeries ← { snaps;
   all_keys ← AllKeys snaps
+  times ← {0 ⊑ item}¨ snaps
   mats ← {snap; AlignSnapshot snap all_keys}¨ snaps
-  ⟨all_keys, mats⟩
+  ⟨all_keys, times, mats⟩
 }
 
 ⍝ Build a T×P×M tensor from aligned matrices.
 Tensor3D ← { snaps;
-  all_keys mats ← AlignSeries snaps
+  all_keys times mats ← AlignSeries snaps
   T ← ≠mats
   (P‿M) ← ≢ (0 ⊑ mats)
   flat ← ∾ mats
-  ⟨all_keys, (T‿P‿M) ⥊ flat⟩
+  ⟨all_keys, times, (T‿P‿M) ⥊ flat⟩
 }
 
 ⍝ Expand one snapshot matrix to include a core axis.
@@ -192,14 +198,14 @@ ExpandCore ← { mat cores;
 }
 
 ⍝ Expand to full 4D tensor with core axis.
-⍝ Returns ⟨all_keys, tensor⟩ where tensor is T×P×M×C.
+⍝ Returns ⟨all_keys, times, tensor⟩ where tensor is T×P×M×C.
 Tensor4D ← { snaps cores;
-  all_keys mats ← AlignSeries snaps
+  all_keys times mats ← AlignSeries snaps
   T ← ≠mats
   (P‿M) ← ≢ (0 ⊑ mats)
   expanded ← {mat; ExpandCore mat cores}¨ mats
   flat ← ∾ expanded
-  ⟨all_keys, (T‿P‿M‿cores) ⥊ flat⟩
+  ⟨all_keys, times, (T‿P‿M‿cores) ⥊ flat⟩
 }
 
 ⍝ Extract one metric slice. Output: T×P×C.
@@ -207,11 +213,14 @@ MetricSlice ← { tensor metric_idx;
   metric_idx ⊏ (tensor ⍉ ⟨2,0,1,3⟩)
 }
 
-⍝ Convert cumulative counters to per-interval deltas.
+⍝ Convert cumulative counters to per-interval deltas and normalize by time.
 ⍝ Output shape is (T-1)×P×M×C.
-ToDeltas ← { tensor;
+ToDeltas ← { times‿tensor;
   (T‿P‿M‿C) ← ≢ tensor
   t1 ← 0 ⌈ (T - 1)
+  dt ← (1 ↓ times) - (¯1 ↓ times)
+  ⍝ Add small epsilon to dt to avoid div-by-zero, though unlikely with monotonic clock.
+  dt ← dt + dt = 0
   d ← (1↓tensor) - (¯1↓tensor)
   g ← 1↓tensor
   presentC ← 0 < MetricSlice tensor STARTTIME
@@ -223,8 +232,10 @@ ToDeltas ← { tensor;
     ⍝ Valid if neither previous nor current sample is -1 (IO sentinel)
     validC ← (¯1↓MetricSlice tensor i) ≠ ¯1
     pairC2 ← pairC ∧ validC ∧ (gi ≠ ¯1)
-    delta ← 0 ⌈ (di × pairC2)
-    sel × delta + (1 - sel) × gi
+    raw_delta ← 0 ⌈ (di × pairC2)
+    ⍝ Normalize by time elapsed (dt). Reshape dt for broadcasting: (T-1)×1×1.
+    norm_delta ← raw_delta ÷ dt ⌜⊣ (↕P) ⌜⊣ (↕C)
+    sel × norm_delta + (1 - sel) × gi
   }¨ ↕M
   tmp ← (M‿t1‿P‿C) ⥊ ∾ per_metric
   tmp ⍉ ⟨1,2,0,3⟩
@@ -331,14 +342,14 @@ MapDensity ← { vals;
 }
 
 ⍝ Render a time×pid heatmap for a chosen metric.
-DensityMatrix ← { tensor metric_idx;
-  metric ← MetricSlice (ToDeltas tensor) metric_idx
+DensityMatrix ← { times‿tensor metric_idx;
+  metric ← MetricSlice (ToDeltas times‿tensor) metric_idx
   ⍝ Metric has shape T×P×C. Collapse C (take max) to get T×P.
   ⌈´ (metric ⍉ ⟨2,0,1⟩)
 }
 
-DensityView ← { tensor metric_idx;
-  •Show MapDensity DensityMatrix tensor metric_idx
+DensityView ← { times‿tensor metric_idx;
+  •Show MapDensity DensityMatrix times‿tensor metric_idx
 }
 
 ⍝ Example usage:
