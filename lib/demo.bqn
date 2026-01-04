@@ -2,7 +2,7 @@
 ts ← •Import "./tensor.bqn"
 
 rows ← 4096
-cols ← 11
+cols ← ts.MetricCount
 cores ← ts.CoreCount
 
 buf ← (rows‿cols) ⥊ 0

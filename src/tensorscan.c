@@ -19,7 +19,9 @@
 #define TS_PATH_MAX PATH_MAX
 #endif
 
-static int ts_warned_io_perm = 0;
+#include <time.h>
+
+static __thread int ts_warned_io_perm = 0;
 
 static int ts_is_numeric(const char *s) {
   if (!s || *s == '\0') {
@@ -56,10 +58,9 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
     fclose(f);
     return 0;
   }
-  if (!strchr(buf, '\n')) {
-    fclose(f);
-    return 0;
-  }
+  /* Check if newline exists to ensure buffer wasn't too small to read the line.
+   * If not found, it might mean truncation, but we only need fields up to 39.
+   * We proceed but verify 'found' later. */
   fclose(f);
 
   line = strrchr(buf, ')');
@@ -92,7 +93,7 @@ static int ts_read_stat(pid_t pid, unsigned long long *utime,
       *rss_pages = strtoll(token, NULL, 10);
       found++;
     } else if (field == 39) {
-      *processor = (int)strtol(token, NULL, 10);
+      *processor = (int)strtoll(token, NULL, 10);
       found++;
     }
     field++;
@@ -169,34 +170,23 @@ static void ts_read_io(pid_t pid, long long *read_bytes,
   fclose(f);
 }
 
-static int ts_pid_filter(const struct dirent *ent) {
-  return ts_is_numeric(ent->d_name);
-}
-
-static int ts_pid_sort(const struct dirent **a, const struct dirent **b) {
-  long pa = strtol((*a)->d_name, NULL, 10);
-  long pb = strtol((*b)->d_name, NULL, 10);
-  return (pa < pb) ? -1 : (pa > pb);
-}
-
 size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
                    double *pid_out) {
-  struct dirent **namelist = NULL;
-  int n = 0;
+  DIR *dir = NULL;
+  struct dirent *ent = NULL;
   size_t row = 0;
   long page_size = sysconf(_SC_PAGESIZE);
-  int i;
 
   if (!out || max_cols < TS_METRIC_COUNT) {
     return 0;
   }
 
-  n = scandir("/proc", &namelist, ts_pid_filter, ts_pid_sort);
-  if (n < 0) {
+  dir = opendir("/proc");
+  if (!dir) {
     return 0;
   }
 
-  for (i = 0; i < n; i++) {
+  while ((ent = readdir(dir)) != NULL) {
     unsigned long long utime = 0;
     unsigned long long stime = 0;
     unsigned long long starttime = 0;
@@ -211,44 +201,57 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     pid_t pid = 0;
     double *row_ptr = NULL;
 
+    if (!ts_is_numeric(ent->d_name)) {
+      continue;
+    }
     if (row >= max_rows) {
-      free(namelist[i]);
+      break;
+    }
+
+    pid = (pid_t)strtol(ent->d_name, NULL, 10);
+    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                      &starttime)) {
       continue;
     }
 
-    pid = (pid_t)strtol(namelist[i]->d_name, NULL, 10);
-    if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
-                     &starttime)) {
-      ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
-      ts_read_io(pid, &read_bytes, &write_bytes);
+    ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
+    ts_read_io(pid, &read_bytes, &write_bytes);
 
-      row_ptr = out + (row * max_cols);
-      row_ptr[TS_UTIME] = (double)utime;
-      row_ptr[TS_STIME] = (double)stime;
-      row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
-      row_ptr[TS_VSIZE] = (double)vsize;
-      row_ptr[TS_NUM_THREADS] = (double)num_threads;
-      row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
-      row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
-      row_ptr[TS_PROCESSOR] = (double)processor;
-      row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
-      row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
-      row_ptr[TS_STARTTIME] = (double)starttime;
+    row_ptr = out + (row * max_cols);
+    row_ptr[TS_UTIME] = (double)utime;
+    row_ptr[TS_STIME] = (double)stime;
+    row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
+    row_ptr[TS_VSIZE] = (double)vsize;
+    row_ptr[TS_NUM_THREADS] = (double)num_threads;
+    row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
+    row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
+    row_ptr[TS_PROCESSOR] = (double)processor;
+    row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
+    row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
+    row_ptr[TS_STARTTIME] = (double)starttime;
 
-      if (pid_out) {
-        pid_out[row] = (double)pid;
-      }
-
-      row++;
+    if (pid_out) {
+      pid_out[row] = (double)pid;
     }
-    free(namelist[i]);
-  }
-  free(namelist);
 
+    row++;
+  }
+
+  closedir(dir);
   return row;
 }
 
 void ts_usleep(unsigned int usec) { usleep(usec); }
+
+double ts_get_monotonic_time(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+  }
+  return 0.0;
+}
+
+size_t ts_get_metric_count(void) { return TS_METRIC_COUNT; }
 
 size_t ts_core_count(size_t ignored) {
   long n = 0;

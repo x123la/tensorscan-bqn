@@ -41,6 +41,12 @@ size_t ts_core_count(size_t ignored);
 /* Sleep for usec useconds. */
 void ts_usleep(unsigned int usec);
 
+/* Get monotonic time in seconds. */
+double ts_get_monotonic_time(void);
+
+/* Get number of columns in metrics matrix. */
+size_t ts_get_metric_count(void);
+
 #ifdef __cplusplus
 }
 #endif

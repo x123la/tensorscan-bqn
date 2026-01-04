@@ -12,7 +12,10 @@ lib ← •FFI "./libtensorscan.so"
 ts_snapshot ← lib ⟨"ts_snapshot", "pnnp>n"⟩
 ts_core_count ← lib ⟨"ts_core_count", "n>n"⟩
 ts_usleep ← lib ⟨"ts_usleep", "n>"⟩
+ts_get_monotonic_time ← lib ⟨"ts_get_monotonic_time", ">f"⟩
+ts_get_metric_count ← lib ⟨"ts_get_metric_count", ">n"⟩
 
+MetricCount ← ts_get_metric_count 0
 CoreCount ← ts_core_count 0
 
 ⍝ Metric indices (mirror tensorscan.h)
@@ -40,12 +43,16 @@ Snapshot ← { rows cols;
 }
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.
+⍝ Uses a monotonic clock to avoid timing drift.
 Capture ← { t rows cols;
-  step ← { acc _;
-    ts_usleep 10000
-    acc ∾ ⟨Snapshot rows cols⟩
+  interval ← 0.01 ⍝ 10ms
+  start ← ts_get_monotonic_time 0
+  step ← { ⟨acc, next⟩ _;
+    wait ← 0 ⌈ next - ts_get_monotonic_time 0
+    ts_usleep ⌊ 1e6 × wait
+    ⟨acc ∾ ⟨Snapshot rows cols⟩, next + interval⟩
   }
-  ⟨⟩ step´ ↕t
+  0 ⊑ ⟨⟨⟩, start + interval⟩ step´ ↕t
 }
 
 ⍝ Extract the processor/core-id column from a snapshot matrix.
@@ -56,7 +63,10 @@ CoreIds ← { mat proc_idx;
 ⍝ One-hot encode core ids for a snapshot.
 ⍝ Output shape: P×C (P processes, C cores).
 CoreOneHot ← { mat proc_idx cores;
-  (CoreIds mat proc_idx) =⌜ ↕cores
+  ids ← CoreIds mat proc_idx
+  ⍝ Clamp core ids to [0, cores-1] to handle hotplugged CPUs
+  safe_ids ← (cores - 1) ⌊ 0 ⌈ ids
+  safe_ids =⌜ ↕cores
 }
 
 ⍝ Build PID keys using ⟨pid, starttime⟩ pairs.
@@ -233,7 +243,7 @@ DensityView ← { tensor metric_idx;
 
 ⍝ Example usage:
 ⍝ rows ← 4096
-⍝ cols ← 11
-⍝ buf ← rows⥊cols⥊0
-⍝ pids ← rows⥊0
+⍝ cols ← MetricCount
+⍝ buf ← (rows‿cols) ⥊ 0
+⍝ pids ← rows ⥊ 0
 ⍝ count ← ts_snapshot buf rows cols pids
