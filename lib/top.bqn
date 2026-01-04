@@ -58,7 +58,7 @@ Render ← {
   •Out "Metric: IO_READ_BYTES (Disk Activity)"
   ts.DensityView (times‿tensor) ts.IO_READ_BYTES
   
-  •Out ResetColor
+  •Out ResetColor ∾ "\033[J" # Clear rest of screen
 }
 
 # --- Main Loop ---

@@ -29,12 +29,20 @@ int get_proc_list(pid_t **pids) {
     return bytes / sizeof(pid_t);
 }
 
+static int cmp_pids(const void *a, const void *b) {
+    pid_t pa = *(const pid_t *)a;
+    pid_t pb = *(const pid_t *)b;
+    return (pa < pb) ? -1 : (pa > pb);
+}
+
 // macOS Implementation of the Snapshot
 size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
                                   double *pid_out, const struct ts_filter *filter) {
     pid_t *pids = NULL;
     int count = get_proc_list(&pids);
     if (count == 0) return 0;
+    
+    qsort(pids, count, sizeof(pid_t), cmp_pids);
 
     size_t row = 0;
 
