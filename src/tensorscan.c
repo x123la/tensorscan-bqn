@@ -175,6 +175,7 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
   DIR *dir = NULL;
   struct dirent *ent = NULL;
   size_t row = 0;
+  size_t total_found = 0;
   long page_size = sysconf(_SC_PAGESIZE);
 
   if (!out || max_cols < TS_METRIC_COUNT) {
@@ -204,44 +205,48 @@ size_t ts_snapshot(double *out, size_t max_rows, size_t max_cols,
     if (!ts_is_numeric(ent->d_name)) {
       continue;
     }
-    if (row >= max_rows) {
-      break;
+
+    if (row < max_rows) {
+      pid = (pid_t)strtol(ent->d_name, NULL, 10);
+      if (ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
+                       &starttime)) {
+        ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
+        ts_read_io(pid, &read_bytes, &write_bytes);
+
+        row_ptr = out + (row * max_cols);
+        row_ptr[TS_UTIME] = (double)utime;
+        row_ptr[TS_STIME] = (double)stime;
+        row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
+        row_ptr[TS_VSIZE] = (double)vsize;
+        row_ptr[TS_NUM_THREADS] = (double)num_threads;
+        row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
+        row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
+        row_ptr[TS_PROCESSOR] = (double)processor;
+        row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
+        row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
+        row_ptr[TS_STARTTIME] = (double)starttime;
+
+        if (pid_out) {
+          pid_out[row] = (double)pid;
+        }
+
+        row++;
+      }
     }
-
-    pid = (pid_t)strtol(ent->d_name, NULL, 10);
-    if (!ts_read_stat(pid, &utime, &stime, &vsize, &rss_pages, &processor,
-                      &starttime)) {
-      continue;
-    }
-
-    ts_read_status(pid, &num_threads, &vol_ctx, &nonvol_ctx);
-    ts_read_io(pid, &read_bytes, &write_bytes);
-
-    row_ptr = out + (row * max_cols);
-    row_ptr[TS_UTIME] = (double)utime;
-    row_ptr[TS_STIME] = (double)stime;
-    row_ptr[TS_RSS] = (double)rss_pages * (double)page_size;
-    row_ptr[TS_VSIZE] = (double)vsize;
-    row_ptr[TS_NUM_THREADS] = (double)num_threads;
-    row_ptr[TS_VOL_CTX_SWITCHES] = (double)vol_ctx;
-    row_ptr[TS_NONVOL_CTX_SWITCHES] = (double)nonvol_ctx;
-    row_ptr[TS_PROCESSOR] = (double)processor;
-    row_ptr[TS_IO_READ_BYTES] = (double)read_bytes;
-    row_ptr[TS_IO_WRITE_BYTES] = (double)write_bytes;
-    row_ptr[TS_STARTTIME] = (double)starttime;
-
-    if (pid_out) {
-      pid_out[row] = (double)pid;
-    }
-
-    row++;
+    total_found++;
   }
 
   closedir(dir);
-  return row;
+  /* Return total found processes to inform BQN about truncation. */
+  return total_found;
 }
 
-void ts_usleep(unsigned int usec) { usleep(usec); }
+void ts_usleep(unsigned int usec) {
+  struct timespec ts;
+  ts.tv_sec = (time_t)(usec / 1000000);
+  ts.tv_nsec = (long)((usec % 1000000) * 1000);
+  nanosleep(&ts, NULL);
+}
 
 double ts_get_monotonic_time(void) {
   struct timespec ts;

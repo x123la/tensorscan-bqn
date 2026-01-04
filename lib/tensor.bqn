@@ -39,7 +39,8 @@ Snapshot ← { rows cols;
   buf ← (rows‿cols) ⥊ 0
   pids ← rows ⥊ 0
   count ← ts_snapshot buf rows cols pids
-  ⟨count, count ↑ pids, count ↑ buf⟩
+  _ ← {count > rows ? •stderr "TensorScan: Buffer full! "∾(•Fmt count)∾" processes found, but rows="∾(•Fmt rows)∾".\n" ; 0} 0
+  ⟨count, (rows⌊count) ↑ pids, (rows⌊count) ↑ buf⟩
 }
 
 ⍝ Capture T snapshots using fold. Returns a list of ⟨count, pids, matrix⟩.
@@ -160,7 +161,10 @@ ToDeltas ← { tensor;
     sel ← 0 < +´ (i = CounterMetrics)
     di ← MetricSlice d i
     gi ← MetricSlice g i
-    delta ← 0 ⌈ (di × pairC)
+    ⍝ Valid if neither previous nor current sample is -1 (IO sentinel)
+    validC ← (¯1↓MetricSlice tensor i) ≠ ¯1
+    pairC2 ← pairC ∧ validC ∧ (gi ≠ ¯1)
+    delta ← 0 ⌈ (di × pairC2)
     sel × delta + (1 - sel) × gi
   }¨ ↕M
   tmp ← (M‿t1‿P‿C) ⥊ ∾ per_metric
