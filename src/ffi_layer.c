@@ -82,8 +82,12 @@ size_t ts_snapshot_delta(double *out, size_t max_rows, size_t max_cols,
   if (count == 0 || max_cols < TS_METRIC_COUNT) return 0;
 
   /* Ensure capacity for CURRENT rows (structured) */
-  if (ts_ensure_rows_capacity(&ts_curr_rows, &ts_curr_cap, count)) {
-      size_t processed_count = 0;
+  if (!ts_ensure_rows_capacity(&ts_curr_rows, &ts_curr_cap, count)) {
+      /* Memory failure fallback: Return 0 to avoid reporting spikes from absolute values */
+      return 0;
+  }
+  
+  size_t processed_count = 0;
       size_t prev_i = 0;
 
       for (size_t i = 0; i < count; ++i) {

@@ -23,6 +23,7 @@
 #endif
 
 static long ts_page_size = -1;
+static double ts_ticks_to_ns = 0.0;
 static __thread pid_t *ts_pid_buf = NULL;
 static __thread size_t ts_pid_cap = 0;
 
@@ -225,6 +226,12 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
     if (ts_page_size <= 0) ts_page_size = 4096;
   }
 
+  if (ts_ticks_to_ns == 0.0) {
+      long hz = sysconf(_SC_CLK_TCK);
+      if (hz <= 0) hz = 100;
+      ts_ticks_to_ns = 1e9 / (double)hz;
+  }
+
   dir = opendir("/proc");
   if (!dir) return 0;
 
@@ -271,8 +278,8 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
 
     ts_read_io(pid, &read_bytes, &write_bytes);
 
-    metrics[TS_UTIME] = (double)utime;
-    metrics[TS_STIME] = (double)stime;
+    metrics[TS_UTIME] = (double)utime * ts_ticks_to_ns;
+    metrics[TS_STIME] = (double)stime * ts_ticks_to_ns;
     metrics[TS_RSS] = (double)rss_pages * (double)ts_page_size;
     metrics[TS_VSIZE] = (double)vsize;
     metrics[TS_NUM_THREADS] = (double)num_threads;
@@ -281,7 +288,7 @@ size_t ts_driver_capture_absolute(double *out, size_t max_rows, size_t max_cols,
     metrics[TS_PROCESSOR] = (double)processor;
     metrics[TS_IO_READ_BYTES] = (double)read_bytes;
     metrics[TS_IO_WRITE_BYTES] = (double)write_bytes;
-    metrics[TS_STARTTIME] = (double)starttime;
+    metrics[TS_STARTTIME] = (double)starttime * ts_ticks_to_ns;
     metrics[TS_UID] = (double)uid;
     metrics[TS_PPID] = (double)ppid;
     metrics[TS_PRIORITY] = (double)priority;
